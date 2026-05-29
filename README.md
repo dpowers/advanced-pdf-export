@@ -4,7 +4,6 @@ Export your Obsidian notes as beautifully formatted, pixel-perfect PDFs with a l
 
 > **Desktop only** — requires the Obsidian desktop app (uses Electron's print pipeline).
 
----
 
 ## Features
 
@@ -23,7 +22,6 @@ Export your Obsidian notes as beautifully formatted, pixel-perfect PDFs with a l
 - **Syncs with active note** — opening any note in Obsidian auto-loads it into the editor
 - **Silent export** — pixel-perfect PDF generated via Electron's `printToPDF` with a native save dialog; no browser print dialog
 
----
 
 ## Screenshots
 
@@ -54,7 +52,6 @@ Switch between six built-in presets from the top bar. Each one immediately updat
 
 ![Heading Style, Tables & Header/Footer settings](screenshots/settings3.png)
 
----
 
 ## Installation
 
@@ -64,10 +61,6 @@ Switch between six built-in presets from the top bar. Each one immediately updat
 3. Place them in your vault at `.obsidian/plugins/advanced-pdf-export/`.
 4. Reload Obsidian and enable the plugin under **Settings → Community Plugins**.
 
-### Community Plugin Store
-*Coming soon — pending approval in the `obsidian-releases` repository.*
-
----
 
 ## Usage
 
@@ -95,7 +88,6 @@ This starts on a fresh page.
 
 **Open settings** — click the ⚙ icon in the top bar, or go to **Settings → Advanced PDF Export**.
 
----
 
 ## Settings Reference
 
@@ -154,7 +146,6 @@ Accent · Body text · Headings · Blockquote border · Table header background 
 | Auto page break before H1 | Inserts `///` before every `#` heading |
 | Auto page break before H2 | Inserts `///` before every `##` heading |
 
----
 
 ## License
 
