@@ -22,6 +22,51 @@ Export your Obsidian notes as beautifully formatted PDFs with full control over 
 
 ---
 
+## Screenshots
+
+### Main Panel — Live Preview
+The three-panel layout: markdown editor on the left, raw source in the center, and the pixel-perfect live preview on the right. The top bar gives instant access to style, page size, orientation, zoom, page breaks, and export.
+
+![Main panel with live preview](screenshots/preview.png)
+
+---
+
+### Page Breaks
+Type `///` on its own line to insert a hard page break. The preview updates instantly — you can see exactly where each new page begins.
+
+![Page break syntax in action](screenshots/usage.png)
+
+---
+
+### Style Presets
+Switch between six built-in presets — **Default**, **Minimal**, **Academic**, **Colorful**, **Modern**, and **Newspaper** — from the top bar. Each preset immediately updates fonts, colors, heading styles, and layout in the live preview.
+
+![Style preset dropdown](screenshots/style1.png)
+
+The **Academic** preset renders a clean, serif-based layout with centered titles, bordered blockquotes, and structured headings — ready for research papers and formal reports.
+
+![Academic preset preview](screenshots/style2.png)
+
+![Academic preset — alternate zoom](screenshots/style3.png)
+
+---
+
+### Settings Panel
+
+**Page & Preset** — Choose a style preset (with a Reset button to restore defaults), set page size (A4, A3, Letter, Legal), orientation, and all four margins in mm.
+
+![Settings: Style Preset and Page](screenshots/settings1.png)
+
+**Typography & Colors** — Pick your font family, font size, line height, paragraph spacing, and heading scale. Fine-tune accent color, body text color, heading color, blockquote border, table header background, and code background.
+
+![Settings: Typography and Colors](screenshots/settings2.png)
+
+**Heading Style, Tables & Header/Footer** — Toggle H1/H2 bottom borders, center H1, enable striped table rows, show or hide the header and footer bars, set custom header/footer text, toggle page numbers, and choose page number position.
+
+![Settings: Heading Style, Tables, Header and Footer](screenshots/settings3.png)
+
+---
+
 ## Installation
 
 ### From Obsidian Community Plugins
@@ -32,7 +77,7 @@ Export your Obsidian notes as beautifully formatted PDFs with full control over 
 4. Click **Install**, then **Enable**.
 
 ### Manual Installation (from GitHub Releases)
-1. Go to the [Releases](https://github.com/ShrekBytes/obsidian-advanced-pdf-export/releases) page.
+1. Go to the [Releases](https://github.com/ShrekBytes/advanced-pdf-export/releases) page.
 2. Download the `main.js`, `manifest.json`, and `styles.css` from the latest release.
 3. Place them inside your vault at `.obsidian/plugins/advanced-pdf-export/`.
 4. Reload Obsidian and enable the plugin.
