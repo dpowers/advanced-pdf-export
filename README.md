@@ -4,6 +4,8 @@ Export your Obsidian notes as beautifully formatted PDFs with full control over 
 
 ---
 
+> warning: vibe coded
+
 ## Features
 
 - **Live A4/Letter/Legal/A3 preview** — see your exact document before exporting
@@ -143,17 +145,4 @@ Go to **Settings → Advanced PDF Export** to configure defaults:
 
 ---
 
-## Roadmap
-
-- [ ] Write changes back to vault file
-- [ ] Drag-and-drop page break insertion
-- [ ] Image support
-- [ ] Table of contents generation
-- [ ] Multiple open documents / tabs
-
----
-
-## License
-
-MIT
 
