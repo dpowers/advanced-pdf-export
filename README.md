@@ -4,6 +4,8 @@ Export your Obsidian notes as beautifully formatted, pixel-perfect PDFs with a l
 
 > **Desktop only** — requires the Obsidian desktop app (uses Electron's print pipeline).
 
+![Main panel with live preview](screenshots/preview.png)
+
 
 ## Features
 
@@ -24,11 +26,6 @@ Export your Obsidian notes as beautifully formatted, pixel-perfect PDFs with a l
 
 
 ## Screenshots
-
-### Live Preview
-Three-panel layout: markdown editor on the left, and the live page preview on the right. The top bar gives instant access to style, page size, orientation, zoom, page breaks, and export.
-
-![Main panel with live preview](screenshots/preview.png)
 
 ### Page Breaks
 Type `///` on its own line to insert a hard page break. The preview updates instantly — you can see exactly where each new page begins.
