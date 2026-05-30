@@ -942,7 +942,7 @@ class PDFExportView extends ItemView {
 
     this.sourceLabel = sourceBar.createEl("span", {
       cls: "mpdf-source-label",
-      text: "Click a note to load it",
+      text: "Click on a note and click copy to load it",
     });
 
     this.editorEl = editorPanel.createEl("textarea", { cls: "mpdf-editor" });
