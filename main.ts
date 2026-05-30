@@ -947,7 +947,7 @@ class PDFExportView extends ItemView {
 
     this.editorEl = editorPanel.createEl("textarea", { cls: "mpdf-editor" });
     this.editorEl.placeholder =
-      "Click \"↓ Replace\" to load the active note into this editor.\n\n" +
+      "Click on a note then click \"copy from note\" to load the active note into this editor.\n\n" +
       "You can then edit freely — changes here won't affect the original note.\n\n" +
       "Use /// on its own line for a manual page break.\n" +
       "Use --- for a horizontal rule.\n\n" +
