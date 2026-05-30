@@ -384,7 +384,7 @@ const BLOCK_TAGS = new Set([
 ]);
 
 const UNSPLITTABLE_TAGS = new Set([
-  "PRE",
+  // NOTE: PRE is intentionally NOT here — it gets its own line-based splitter.
   "CODE",
   "IMG",
   "HR",
@@ -562,7 +562,8 @@ function buildListWithItems(listEl: HTMLElement, items: HTMLElement[]): HTMLElem
 
 function splitListElement(
   listEl: HTMLElement,
-  fits: (node: HTMLElement) => boolean
+  fits: (node: HTMLElement) => boolean,
+  forceSplit: boolean
 ): [HTMLElement, HTMLElement] | null {
   const items = Array.from(listEl.children).filter(
     (child) => (child as HTMLElement).tagName === "LI"
@@ -579,7 +580,13 @@ function splitListElement(
     }
   }
 
-  if (fitCount <= 0 || fitCount >= items.length) return null;
+  // If nothing fits and we're forced (element is alone on an empty page),
+  // push at least 1 item so we never loop forever.
+  if (fitCount <= 0) {
+    if (!forceSplit || items.length < 2) return null;
+    fitCount = 1;
+  }
+  if (fitCount >= items.length) return null;
   const first = buildListWithItems(listEl, items.slice(0, fitCount));
   const second = buildListWithItems(listEl, items.slice(fitCount));
   return [first, second];
@@ -606,7 +613,8 @@ function buildTableWithRows(tableEl: HTMLTableElement, rows: HTMLTableRowElement
 
 function splitTableElement(
   tableEl: HTMLTableElement,
-  fits: (node: HTMLElement) => boolean
+  fits: (node: HTMLElement) => boolean,
+  forceSplit: boolean
 ): [HTMLElement, HTMLElement] | null {
   const body = tableEl.tBodies[0];
   const rows = body
@@ -625,9 +633,73 @@ function splitTableElement(
     }
   }
 
-  if (fitCount <= 0 || fitCount >= rows.length) return null;
+  // If nothing fits and we're forced (table is alone on an empty page),
+  // push at least 1 row so we never loop forever on a very tall single row.
+  if (fitCount <= 0) {
+    if (!forceSplit || rows.length < 2) return null;
+    fitCount = 1;
+  }
+  if (fitCount >= rows.length) return null;
   const first = buildTableWithRows(tableEl, rows.slice(0, fitCount));
   const second = buildTableWithRows(tableEl, rows.slice(fitCount));
+  return [first, second];
+}
+
+// ── PRE splitter ──────────────────────────────────────────────────────────────
+//
+// Splits a <pre><code>…</code></pre> block by lines. Each attempt adds one
+// more line until we find the maximum that still fits on the current page.
+// If even a single line is taller than the page (extremely large font or tiny
+// page), we fall back to splitting at character level so progress is always made.
+
+function buildPreWithLines(preEl: HTMLElement, lines: string[]): HTMLElement {
+  // Preserve the inner <code> wrapper if present so CSS stays correct.
+  const clone = preEl.cloneNode(false) as HTMLElement;
+  const codeEl = preEl.querySelector("code");
+  if (codeEl) {
+    const codeClone = codeEl.cloneNode(false) as HTMLElement;
+    codeClone.textContent = lines.join("\n");
+    clone.appendChild(codeClone);
+  } else {
+    clone.textContent = lines.join("\n");
+  }
+  return clone;
+}
+
+function splitPreElement(
+  preEl: HTMLElement,
+  fits: (node: HTMLElement) => boolean,
+  forceSplit: boolean
+): [HTMLElement, HTMLElement] | null {
+  const rawText = preEl.textContent ?? "";
+  // Split by newline but keep empty lines (they matter for code layout).
+  const lines = rawText.split("\n");
+  // Trailing synthetic empty line from the split — drop it to avoid a phantom
+  // blank line at the bottom of every fragment.
+  if (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
+
+  if (lines.length < 2) return null;  // can't split a single-line block
+
+  let fitCount = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const candidate = buildPreWithLines(preEl, lines.slice(0, i + 1));
+    if (fits(candidate)) {
+      fitCount = i + 1;
+    } else {
+      break;
+    }
+  }
+
+  // forceSplit: block is alone on an empty page but still overflows.
+  // Guarantee at least 1 line moves forward so the loop never stalls.
+  if (fitCount <= 0) {
+    if (!forceSplit || lines.length < 2) return null;
+    fitCount = 1;
+  }
+  if (fitCount >= lines.length) return null;
+
+  const first  = buildPreWithLines(preEl, lines.slice(0, fitCount));
+  const second = buildPreWithLines(preEl, lines.slice(fitCount));
   return [first, second];
 }
 
@@ -638,11 +710,14 @@ function splitElement(
 ): [HTMLElement, HTMLElement] | null {
   if (UNSPLITTABLE_TAGS.has(el.tagName)) return null;
 
+  if (el.tagName === "PRE") {
+    return splitPreElement(el, fits, forceSplit);
+  }
   if (el.tagName === "TABLE") {
-    return splitTableElement(el as HTMLTableElement, fits);
+    return splitTableElement(el as HTMLTableElement, fits, forceSplit);
   }
   if (el.tagName === "UL" || el.tagName === "OL") {
-    return splitListElement(el, fits);
+    return splitListElement(el, fits, forceSplit);
   }
   if (isInlineSplitCandidate(el)) {
     return splitInlineElement(el, fits, forceSplit);
@@ -707,6 +782,8 @@ function paginateHTML(
       continue;
     }
 
+    // Element doesn't fit. Try to split it so part goes on this page and the
+    // remainder is re-processed on the next iteration.
     const forceSplit = currentPage.length === 0;
     const split = splitElement(child, fits, forceSplit);
     if (split) {
@@ -724,12 +801,17 @@ function paginateHTML(
       continue;
     }
 
+    // Can't split. If there's already content on this page, flush it and retry
+    // the same element on a fresh page — it may fit with a full page height.
     if (currentPage.length > 0) {
       pages.push(currentPage);
       currentPage = [];
-      continue;
+      continue;  // retry same idx on the empty page
     }
 
+    // Element is alone on an empty page and still can't be split (truly
+    // unsplittable, e.g. a giant image). Force it onto its own page and move on
+    // so we never loop forever.
     currentPage.push(childClone);
     pages.push(currentPage);
     currentPage = [];
@@ -872,12 +954,42 @@ class PDFExportView extends ItemView {
   getDisplayText() { return "Advanced PDF Export"; }
   getIcon() { return "file-output"; }
 
+  // Obsidian calls getState() before closing and restores via setState() on
+  // reopen. We persist the active file path so the panel rehydrates itself
+  // automatically after an Obsidian restart.
+  getState(): Record<string, unknown> {
+    return { filePath: this.currentFile?.path ?? null };
+  }
+
+  async setState(state: Record<string, unknown>, result: { history: boolean }): Promise<void> {
+    // Obsidian passes the saved state on reopen. We'll use it in onOpen via
+    // this._pendingStatePath so the timing is correct (UI must exist first).
+    if (typeof state?.filePath === "string") {
+      this._pendingStatePath = state.filePath;
+    }
+    return super.setState(state, result);
+  }
+
+  // Holds the file path restored from Obsidian's workspace state.
+  // Consumed once inside onOpen after the UI is built.
+  private _pendingStatePath: string | null = null;
+
   async onOpen() {
     const container = this.containerEl.children[1] as HTMLElement;
     container.empty();
     container.style.cssText = "display:flex;flex-direction:column;height:100%;padding:0;overflow:hidden;";
     this.buildUI(container);
-    this.loadCurrentNote();
+
+    // 1. Try to load whatever markdown note is currently active.
+    // 2. If nothing is active (e.g. Obsidian just restarted and the last
+    //    focused leaf hasn't been restored yet), fall back to the file path
+    //    we saved in getState() / setState().
+    // 3. If that's also missing, wait for the workspace to finish its layout
+    //    restore before trying once more.
+    const loaded = await this.loadCurrentNote();
+    if (!loaded) {
+      await this.tryRestoreFromState();
+    }
 
     this.registerEvent(
       this.app.workspace.on("active-leaf-change", () => this.loadCurrentNote())
@@ -1010,13 +1122,61 @@ class PDFExportView extends ItemView {
 
   // ── Note loading ───────────────────────────────────────────────────────────
 
-  async loadCurrentNote() {
+  // Returns true if a note was successfully loaded, false otherwise.
+  async loadCurrentNote(): Promise<boolean> {
     const mv = this.app.workspace.getActiveViewOfType(MarkdownView);
     if (mv?.file) {
       this.currentFile = mv.file;
       this.editorEl.value = await this.app.vault.read(mv.file);
       this.render();
+      return true;
     }
+    return false;
+  }
+
+  // Called on reopen when no markdown view is active yet. Tries to restore
+  // from the path saved in workspace state. If the workspace layout hasn't
+  // finished restoring (common on first load), waits one animation frame
+  // before trying again, then falls back to a short timeout for slow vaults.
+  private async tryRestoreFromState(): Promise<void> {
+    // First, try the path we received from setState().
+    if (this._pendingStatePath) {
+      const loaded = await this.loadFileByPath(this._pendingStatePath);
+      this._pendingStatePath = null;
+      if (loaded) return;
+    }
+
+    // The workspace may still be in the middle of restoring its layout. Wait
+    // one frame and re-try the active view, then also re-try the saved path.
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    const loadedAfterFrame = await this.loadCurrentNote();
+    if (loadedAfterFrame) return;
+
+    if (this._pendingStatePath) {
+      await this.loadFileByPath(this._pendingStatePath);
+      this._pendingStatePath = null;
+      return;
+    }
+
+    // Last resort: give the workspace a bit more time (covers slow cold starts).
+    await new Promise<void>((resolve) => setTimeout(resolve, 400));
+    const loadedAfterDelay = await this.loadCurrentNote();
+    if (!loadedAfterDelay && this._pendingStatePath) {
+      await this.loadFileByPath(this._pendingStatePath);
+      this._pendingStatePath = null;
+    }
+  }
+
+  // Loads a file by its vault path. Returns true on success.
+  private async loadFileByPath(path: string): Promise<boolean> {
+    const file = this.app.vault.getAbstractFileByPath(path);
+    if (file instanceof TFile) {
+      this.currentFile = file;
+      this.editorEl.value = await this.app.vault.read(file);
+      this.render();
+      return true;
+    }
+    return false;
   }
 
   insertAtCursor(text: string) {
@@ -1365,7 +1525,12 @@ class PDFExportView extends ItemView {
     }
   }
 
-  async onClose() { /* nothing */ }
+  async onClose() {
+    // Clear state so closing the panel frees resources and the next open
+    // starts fresh (picking up whatever note is active at that time).
+    this.currentFile = null;
+    this._pendingStatePath = null;
+  }
 }
 
 // ─── Utility ──────────────────────────────────────────────────────────────────
