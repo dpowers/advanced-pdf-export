@@ -28,18 +28,20 @@ Export Obsidian notes as pixel-perfect PDFs with six style presets, manual page 
 ## Screenshots
 
 ### Page Breaks
-Type `///` on its own line to insert a hard page break. The preview updates instantly — you can see exactly where each new page begins.
+Type `///` on its own line to insert a hard page break
 
 ![Page break syntax in action](screenshots/usage.png)
 
 ### Style Presets
-Switch between six built-in presets from the top bar. Each one immediately updates fonts, colors, heading styles, and layout in the live preview.
+Presets configurations can be changed from settings
 
 ![Style preset dropdown](screenshots/style1.png)
 
 ![Academic preset](screenshots/style2.png)
 
 ![Academic preset — alternate view](screenshots/style3.png)
+
+and more...
 
 ### Settings Panel
 
