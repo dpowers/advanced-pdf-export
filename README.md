@@ -27,13 +27,27 @@ Export Obsidian notes as pixel-perfect PDFs with six style presets, manual page 
 
 ## Screenshots
 
-![Main panel with live preview](screenshots/preview.png)
+### Page Breaks
+Type `///` on its own line to insert a hard page break. The preview updates instantly — you can see exactly where each new page begins.
 
-![Page breaks in action](screenshots/usage.png)
+![Page break syntax in action](screenshots/usage.png)
 
-![Style presets](screenshots/style1.png)
+### Style Presets
+Switch between six built-in presets from the top bar. Each one immediately updates fonts, colors, heading styles, and layout in the live preview.
 
-![Settings panel](screenshots/settings1.png)
+![Style preset dropdown](screenshots/style1.png)
+
+![Academic preset](screenshots/style2.png)
+
+![Academic preset — alternate view](screenshots/style3.png)
+
+### Settings Panel
+
+![Page & Preset settings](screenshots/settings1.png)
+
+![Typography & Colors settings](screenshots/settings2.png)
+
+![Heading Style, Tables & Header/Footer settings](screenshots/settings3.png)
 
 
 ## Installation
@@ -49,17 +63,15 @@ Export Obsidian notes as pixel-perfect PDFs with six style presets, manual page 
 
 **Open the panel** — click the `file-output` icon in the left ribbon, or `Ctrl/Cmd + P` → *Open Advanced PDF Export panel*. The panel opens in the right sidebar.
 
-**Load a note** — click the **Copy Note** button to load the active note into the editor. Edits are local to this panel; they don't sync back to your vault (by design, for layout-only adjustments).
+**Load a note** — click on a note then click on **copy from note** button to load the active note into the editor. Edits are local to this panel; they don't sync back to your vault (by design, for layout-only adjustments).
 
-**Edit markdown** — type or paste markdown in the editor. Use `///` on its own line for a page break, `---` for a horizontal rule.
+**Edit markdown** — type or paste markdown in the editor.
 
-**Render the preview** — click **⟳ Render PDF** button or press `Ctrl+Enter` / `Cmd+Enter` to update the live preview with the current editor content.
+**Insert Pagebreak** -  Use `///` on its own line for a page break(new page).
 
-**Export PDF** — click **⬇ Export PDF** in the top bar. A native save dialog appears; the PDF will match the preview exactly.
+**Export** — click **⬇ Export PDF** in the top bar to open a native save dialog and generate the PDF.
 
-**Insert a page break** — click the **Break** button in the top bar to insert `///` at the cursor, or type it manually.
-
-**Open settings** — click the ⚙ icon in the top bar, or go to **Settings → Advanced PDF Export** to configure style presets, fonts, margins, colors, and other defaults.
+**Open settings** — click the ⚙ icon in the top bar, or go to **Settings → Advanced PDF Export**.
 
 
 ## Settings Reference
