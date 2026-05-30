@@ -1,6 +1,6 @@
 # Advanced PDF Export — Obsidian Plugin
 
-Export your Obsidian notes as beautifully formatted, pixel-perfect PDFs with a live preview, style presets, manual page breaks, and complete layout control — all from inside Obsidian.
+Export Obsidian notes as pixel-perfect PDFs with six style presets, manual page breaks, full layout control, and a live preview — all from the plugin panel.
 
 > **Desktop only** — requires the Obsidian desktop app (uses Electron's print pipeline).
 
@@ -9,45 +9,31 @@ Export your Obsidian notes as beautifully formatted, pixel-perfect PDFs with a l
 
 ## Features
 
-- **Live page preview** — full-resolution A4 / A3 / A5 / Letter / Legal page preview, updated instantly as you type or change any setting
-- **Style presets** — six built-in presets (Default, Minimal, Academic, Colorful, Modern, Newspaper), each with a Reset button to restore defaults
-- **Manual page breaks** — type `///` on its own line to force a page break anywhere
-- **Auto page breaks** — optional settings to insert a page break before every `#` (H1) or `##` (H2) heading
+- **Manual preview rendering** — click **⟳ Render PDF** button or press `Ctrl+Enter` / `Cmd+Enter` to update the preview
+- **Copy note to editor** — click **Copy Note** button to load the current note into the editor (changes are local, non-destructive)
+- **Style presets** — six built-in presets (Default, Minimal, Academic, Colorful, Modern, Newspaper), each with a Reset button
+- **Manual page breaks** — type `///` on its own line to force a page break
+- **Auto page breaks** — optional: insert page break before every `#` (H1) or `##` (H2) heading
 - **Page size & orientation** — A4, A3, A5, Letter, Legal × Portrait / Landscape
-- **Full margin control** — top, bottom, left, and right in mm
-- **Typography** — font family (Georgia, Times, Palatino, Arial, Helvetica, Trebuchet, Courier New), font size, line height, paragraph spacing, heading scale
+- **Full margin control** — top, bottom, left, right (mm)
+- **Typography** — font family, size, line height, paragraph spacing, heading scale
 - **Colors** — accent, body text, headings, blockquote border, table header background, code background
-- **Heading style** — per-heading bottom border toggles, center H1
+- **Heading styles** — per-heading bottom border toggles, center H1
 - **Tables** — optional striped rows
-- **Header & footer** — show/hide toggles, custom text, page numbers (X / Y) with left / center / right position control
-- **Zoom slider** — scale the preview from 35% to 100% without re-paginating
-- **Syncs with active note** — opening any note in Obsidian auto-loads it into the editor
-- **Silent export** — pixel-perfect PDF generated via Electron's `printToPDF` with a native save dialog; no browser print dialog
+- **Header & footer** — custom text, page numbers (X / Y), position control
+- **Zoom slider** — scale preview 35%–100% without re-paginating
+- **Pixel-perfect export** — generates PDF via Electron's `printToPDF`; exported PDF matches preview exactly
 
 
 ## Screenshots
 
-### Page Breaks
-Type `///` on its own line to insert a hard page break. The preview updates instantly — you can see exactly where each new page begins.
+![Main panel with live preview](screenshots/preview.png)
 
-![Page break syntax in action](screenshots/usage.png)
+![Page breaks in action](screenshots/usage.png)
 
-### Style Presets
-Switch between six built-in presets from the top bar. Each one immediately updates fonts, colors, heading styles, and layout in the live preview.
+![Style presets](screenshots/style1.png)
 
-![Style preset dropdown](screenshots/style1.png)
-
-![Academic preset](screenshots/style2.png)
-
-![Academic preset — alternate view](screenshots/style3.png)
-
-### Settings Panel
-
-![Page & Preset settings](screenshots/settings1.png)
-
-![Typography & Colors settings](screenshots/settings2.png)
-
-![Heading Style, Tables & Header/Footer settings](screenshots/settings3.png)
+![Settings panel](screenshots/settings1.png)
 
 
 ## Installation
@@ -61,29 +47,19 @@ Switch between six built-in presets from the top bar. Each one immediately updat
 
 ## Usage
 
-**Open the panel** via the `file-output` icon in the left ribbon, or `Ctrl/Cmd + P` → *Open Advanced PDF Export panel*. The panel opens in the right sidebar.
+**Open the panel** — click the `file-output` icon in the left ribbon, or `Ctrl/Cmd + P` → *Open Advanced PDF Export panel*. The panel opens in the right sidebar.
 
-**Load a note** — opening any note in Obsidian auto-loads it into the editor. You can also edit directly in the panel (changes won't sync back to your vault file — by design, for layout-only adjustments).
+**Load a note** — click the **Copy Note** button to load the active note into the editor. Edits are local to this panel; they don't sync back to your vault (by design, for layout-only adjustments).
 
-**Insert a page break** — click the **Break** button in the top bar to insert `///` at the cursor, or type it manually:
+**Edit markdown** — type or paste markdown in the editor. Use `///` on its own line for a page break, `---` for a horizontal rule.
 
-```markdown
-# Chapter 1
+**Render the preview** — click **⟳ Render PDF** button or press `Ctrl+Enter` / `Cmd+Enter` to update the live preview with the current editor content.
 
-Some content here.
+**Export PDF** — click **⬇ Export PDF** in the top bar. A native save dialog appears; the PDF will match the preview exactly.
 
-///
+**Insert a page break** — click the **Break** button in the top bar to insert `///` at the cursor, or type it manually.
 
-# Chapter 2
-
-This starts on a fresh page.
-```
-
-`---` on its own line is a horizontal rule (visual separator, same page). `///` is a hard page break (new page).
-
-**Export** — click **⬇ Export PDF** in the top bar to open a native save dialog and generate the PDF.
-
-**Open settings** — click the ⚙ icon in the top bar, or go to **Settings → Advanced PDF Export**.
+**Open settings** — click the ⚙ icon in the top bar, or go to **Settings → Advanced PDF Export** to configure style presets, fonts, margins, colors, and other defaults.
 
 
 ## Settings Reference
