@@ -10,7 +10,7 @@ Export Obsidian notes as pixel-perfect PDFs with six style presets, manual page 
 ## Features
 
 - **Manual preview rendering** — click **⟳ Render PDF** button or press `Ctrl+Enter` / `Cmd+Enter` to update the preview
-- **Copy note to editor** — click **Copy Note** button to load the current note into the editor (changes are local, non-destructive)
+- **Copy content to editor** — click **copy from note** button to load the current note into the editor (changes are local, non-destructive)
 - **Style presets** — six built-in presets (Default, Minimal, Academic, Colorful, Modern, Newspaper), each with a Reset button
 - **Manual page breaks** — type `///` on its own line to force a page break
 - **Auto page breaks** — optional: insert page break before every `#` (H1) or `##` (H2) heading

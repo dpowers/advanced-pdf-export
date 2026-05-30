@@ -934,7 +934,7 @@ class PDFExportView extends ItemView {
 
     const copyBtn = sourceBar.createEl("button", {
       cls: "mpdf-btn mpdf-btn-replace",
-      text: "Copy Note", // clearer UX than "Replace"
+      text: "copy from note", // clearer UX than "Replace"
     });
 
     copyBtn.title = "Replace editor contents with the current note";
