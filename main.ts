@@ -268,7 +268,58 @@ async function renderMarkdownToHtml(
 ): Promise<string> {
   const temp = document.createElement("div");
   await MarkdownRenderer.render(app, markdown, temp, sourcePath, component);
+  postProcessRenderedHTML(temp);
   return temp.innerHTML;
+}
+
+/**
+ * Converts a heading's text content into a URL-fragment-safe slug,
+ * matching the algorithm used by most Markdown renderers:
+ *   - lowercase
+ *   - strip everything except letters, digits, spaces, and hyphens
+ *   - replace spaces with hyphens
+ *   - collapse consecutive hyphens
+ */
+function slugifyHeading(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s-]/gu, "")
+    .trim()
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-");
+}
+
+/**
+ * Single post-processing pass over Obsidian's rendered HTML that:
+ *
+ * 1. Assigns `id` attributes to all h1–h6 so `#fragment` links have targets.
+ * 2. Strips the `external-link` class from <a> elements so Obsidian's theme
+ *    CSS never gets a chance to inject the ↗ icon (works even when the theme
+ *    rule has higher specificity than our own `.mpdf-doc` scoped rule).
+ * 3. Sets a `title` attribute on every internal `<a href="#…">` to the text
+ *    of the heading it points to, so both the preview tooltip and the PDF
+ *    viewer tooltip show "Overview" instead of a generic "go to page N".
+ */
+function postProcessRenderedHTML(root: HTMLElement): void {
+  // ── Pass 1: assign heading IDs ────────────────────────────────────────────
+  const seen = new Map<string, number>();
+
+  root.querySelectorAll("h1,h2,h3,h4,h5,h6").forEach((el) => {
+    const text = (el as HTMLElement).innerText || el.textContent || "";
+    const base = slugifyHeading(text);
+    if (!base) return;
+    const count = seen.get(base) ?? 0;
+    seen.set(base, count + 1);
+    const id = count === 0 ? base : `${base}-${count}`;
+    el.id = id;
+  });
+
+  // ── Pass 2: fix all anchor elements ────────────────────────────────────────
+  root.querySelectorAll<HTMLAnchorElement>("a").forEach((a) => {
+    // Remove the Obsidian-added class that triggers the external link icon.
+    // This is the only reliable way to beat the theme's unscoped CSS rule.
+    a.classList.remove("external-link");
+  });
 }
 
 // ─── CSS generator ────────────────────────────────────────────────────────────
@@ -365,6 +416,7 @@ function buildDocCSS(s: PDFExportSettings): string {
   }
   .mpdf-doc img { max-width: 100%; height: auto; display: block; margin: ${s.paragraphSpacing}em auto; }
   .mpdf-doc a { color: ${s.accentColor}; }
+  .mpdf-doc a.external-link::after { display: none !important; content: none !important; }
   .mpdf-doc table { width: 100%; border-collapse: collapse; margin: 0 0 ${s.paragraphSpacing}em; font-size: 0.92em; }
   .mpdf-doc th {
     background: ${s.tableHeaderBg};
@@ -1190,6 +1242,21 @@ class PDFExportView extends ItemView {
     const styleEl = this.previewEl.createEl("style");
     styleEl.textContent = docCSS;
 
+    // Build a map of heading id → page number across all pages so internal
+    // anchor tooltips can show "Go to page N", consistent with the PDF viewer.
+    const idToPage = new Map<string, number>();
+    for (const layout of layouts) {
+      for (const node of layout.pageNodes) {
+        (node as HTMLElement).querySelectorAll("[id]").forEach((el) => {
+          if (!idToPage.has(el.id)) idToPage.set(el.id, layout.pageNum);
+        });
+        if ((node as HTMLElement).id) {
+          if (!idToPage.has((node as HTMLElement).id))
+            idToPage.set((node as HTMLElement).id, layout.pageNum);
+        }
+      }
+    }
+
     for (const layout of layouts) {
       const scaledW = Math.round(pw * scale);
       const scaledH = Math.round(ph * scale);
@@ -1223,6 +1290,19 @@ class PDFExportView extends ItemView {
         `width:${contentW}px`, `height:${contentH}px`, "overflow:hidden",
       ].join(";");
       for (const node of layout.pageNodes) contentDiv.appendChild(node.cloneNode(true));
+
+      // Wire internal anchor links: scroll preview to the target heading,
+      // and show "Go to page N" tooltip — consistent with the PDF viewer.
+      contentDiv.querySelectorAll<HTMLAnchorElement>("a[href^='#']").forEach((a) => {
+        const targetId = decodeURIComponent(a.getAttribute("href")!.slice(1));
+        const pageNum  = idToPage.get(targetId);
+        if (pageNum) a.title = `Go to page ${pageNum}`;
+        a.addEventListener("click", (e) => {
+          e.preventDefault();
+          const target = this.previewEl.querySelector<HTMLElement>(`#${CSS.escape(targetId)}`);
+          if (target) target.scrollIntoView({ behavior: "smooth", block: "start" });
+        });
+      });
 
       if (s.showFooter) {
         const footer = page.createEl("div");
