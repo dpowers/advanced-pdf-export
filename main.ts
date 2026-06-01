@@ -1,11 +1,9 @@
 import {
-  App, Component, ItemView, MarkdownRenderer, MarkdownView, Notice,
-  Plugin, PluginSettingTab, Setting, TFile, WorkspaceLeaf, setIcon,
+  App, Component, MarkdownRenderer, MarkdownView, Modal, Notice,
+  Plugin, PluginSettingTab, Setting, TFile, setIcon,
 } from "obsidian";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
-
-const VIEW_TYPE = "advanced-pdf-export";
 
 const PAGE_SIZES: Record<string, { w: number; h: number }> = {
   A4:     { w: 794,  h: 1123 },
@@ -54,6 +52,7 @@ interface PDFExportSettings extends DocStyle {
   pageNumberPosition: "center" | "left" | "right";
   autoBreakH1: boolean;
   autoBreakH2: boolean;
+  includeFilenameAsTitle: boolean;
   previewScale: number;
 }
 
@@ -229,6 +228,7 @@ const DEFAULT_SETTINGS: PDFExportSettings = {
   pageNumberPosition: "right",
   autoBreakH1: false,
   autoBreakH2: false,
+  includeFilenameAsTitle: false,
   previewScale: 0.62,
 };
 
@@ -854,34 +854,27 @@ function buildPageLayouts(allPages: HTMLElement[][], s: PDFExportSettings): Page
 
 export default class MarkdownPDFPlugin extends Plugin {
   settings: PDFExportSettings;
+  activeModal: PDFExportModal | null = null;
 
   async onload() {
     await this.loadSettings();
-    this.registerView(VIEW_TYPE, (leaf) => new PDFExportView(leaf, this));
-    this.addRibbonIcon("file-output", "Advanced PDF Export", () => this.activateView());
+    this.addRibbonIcon("file-output", "Advanced PDF Export", () => this.openModal());
     this.addCommand({
       id: "open-advanced-pdf-export",
-      name: "Open Advanced PDF Export panel",
-      callback: () => this.activateView(),
+      name: "Open Advanced PDF Export",
+      callback: () => this.openModal(),
     });
     this.addSettingTab(new PDFExportSettingTab(this.app, this));
   }
 
   onunload() {
-    this.app.workspace.detachLeavesOfType(VIEW_TYPE);
+    this.activeModal?.close();
   }
 
-  async activateView() {
-    const { workspace } = this.app;
-    let leaf = workspace.getLeavesOfType(VIEW_TYPE)[0];
-    if (!leaf) {
-      const right = workspace.getRightLeaf(false);
-      if (right) {
-        await right.setViewState({ type: VIEW_TYPE, active: true });
-        leaf = right;
-      }
-    }
-    if (leaf) workspace.revealLeaf(leaf);
+  openModal() {
+    // Close any existing instance before opening a fresh one.
+    if (this.activeModal) this.activeModal.close();
+    new PDFExportModal(this.app, this).open();
   }
 
   async loadSettings() {
@@ -894,9 +887,7 @@ export default class MarkdownPDFPlugin extends Plugin {
 
   async saveSettingsAndRender() {
     await this.saveSettings();
-    for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) {
-      if (leaf.view instanceof PDFExportView) leaf.view.render();
-    }
+    this.activeModal?.render();
   }
 
   applyPreset(key: string) {
@@ -907,9 +898,9 @@ export default class MarkdownPDFPlugin extends Plugin {
   }
 }
 
-// ─── View ─────────────────────────────────────────────────────────────────────
+// ─── Modal ────────────────────────────────────────────────────────────────────
 
-class PDFExportView extends ItemView {
+class PDFExportModal extends Modal {
   plugin: MarkdownPDFPlugin;
   private editorEl: HTMLTextAreaElement;
   private previewEl: HTMLElement;
@@ -917,55 +908,45 @@ class PDFExportView extends ItemView {
   private wordCountEl: HTMLElement;
   private sourceLabel: HTMLElement;
 
+  // Owned Component passed to MarkdownRenderer.render — loaded on open,
+  // unloaded on close so any child components are cleaned up properly.
+  private renderComponent = new Component();
+
   private currentFile: TFile | null = null;
   private renderToken = 0;
   private layoutCache: LayoutCache | null = null;
-  private pendingStatePath: string | null = null;
 
-  constructor(leaf: WorkspaceLeaf, plugin: MarkdownPDFPlugin) {
-    super(leaf);
+  constructor(app: App, plugin: MarkdownPDFPlugin) {
+    super(app);
     this.plugin = plugin;
   }
 
-  getViewType()    { return VIEW_TYPE; }
-  getDisplayText() { return "Advanced PDF Export"; }
-  getIcon()        { return "file-output"; }
-
-  // Obsidian persists the return value of getState() in its workspace file and
-  // passes it back via setState() when the panel is reopened. We store the
-  // active file path so the panel rehydrates automatically after a restart.
-  getState(): Record<string, unknown> {
-    return { filePath: this.currentFile?.path ?? null };
-  }
-
-  async setState(state: Record<string, unknown>, result: { history: boolean }): Promise<void> {
-    if (typeof state?.filePath === "string") this.pendingStatePath = state.filePath;
-    return super.setState(state, result);
-  }
-
   async onOpen() {
-    const container = this.containerEl.children[1] as HTMLElement;
-    container.empty();
-    container.style.cssText = "display:flex;flex-direction:column;height:100%;padding:0;overflow:hidden;";
-    this.buildUI(container);
+    this.plugin.activeModal = this;
+    this.renderComponent.load();
+    this.modalEl.addClass("mpdf-modal");
+    this.contentEl.style.cssText = "display:flex;flex-direction:column;height:100%;padding:0;overflow:hidden;";
+    this.buildUI(this.contentEl);
 
-    // Load order on open:
-    //   1. Active markdown note (instant, covers normal panel open).
-    //   2. Saved path from workspace state (covers Obsidian restart where the
-    //      markdown leaf isn't active yet when our view initialises).
-    //   3. Wait one frame and retry both (layout restore may still be in flight).
-    //   4. Wait 400 ms and retry (slow vault / cold start safety net).
-    if (!await this.loadCurrentNote()) await this.tryRestoreFromState();
-
-    this.registerEvent(
-      this.app.workspace.on("active-leaf-change", () => this.loadCurrentNote()),
-    );
+    // Auto-load the active note if one is open. If not, the editor is empty
+    // and the user can type freely or paste any markdown.
+    const mv = this.app.workspace.getActiveViewOfType(MarkdownView);
+    if (mv?.file) {
+      this.currentFile = mv.file;
+      const content = await this.app.vault.read(mv.file);
+      this.editorEl.value = content;
+      this.wordCountEl.textContent = `${content.trim().split(/\s+/).filter(Boolean).length} words`;
+      this.sourceLabel.textContent = mv.file.basename;
+      this.sourceLabel.title = mv.file.path;
+      this.render();
+    }
   }
 
-  async onClose() {
-    this.currentFile      = null;
-    this.layoutCache      = null;
-    this.pendingStatePath = null;
+  onClose() {
+    this.renderComponent.unload();
+    this.plugin.activeModal = null;
+    this.currentFile        = null;
+    this.layoutCache        = null;
   }
 
   // ── UI ──────────────────────────────────────────────────────────────────────
@@ -979,28 +960,30 @@ class PDFExportView extends ItemView {
     const editorPanel = main.createEl("div", { cls: "mpdf-editor-panel" });
 
     // ── Source file bar ───────────────────────────────────────────────────────
-    // ── Source file bar ───────────────────────────────────────────────────────
-    const sourceBar = editorPanel.createEl("div", {
-      cls: "mpdf-source-bar",
-    });
+    const sourceBar = editorPanel.createEl("div", { cls: "mpdf-source-bar" });
 
-    const copyBtn = sourceBar.createEl("button", {
-      cls: "mpdf-btn mpdf-btn-replace",
-      text: "copy from note", // clearer UX than "Replace"
+    const clearBtn = sourceBar.createEl("button", {
+      cls: "mpdf-btn mpdf-btn-clear",
+      text: "clear",
     });
-
-    copyBtn.title = "Replace editor contents with the current note";
-    copyBtn.addEventListener("click", () => this.copyNoteToEditor());
+    clearBtn.title = "Clear the editor";
+    clearBtn.addEventListener("click", () => {
+      this.editorEl.value = "";
+      this.wordCountEl.textContent = "0 words";
+      this.sourceLabel.textContent = "—";
+      this.currentFile = null;
+    });
 
     this.sourceLabel = sourceBar.createEl("span", {
       cls: "mpdf-source-label",
-      text: "Click on a note and click copy to load it",
+      text: "—",
     });
 
     this.editorEl = editorPanel.createEl("textarea", { cls: "mpdf-editor" });
     this.editorEl.placeholder =
-      "Click on a note then click \"copy from note\" to load the active note into this editor.\n\n" +
-      "You can then edit freely — changes here won't affect the original note.\n\n" +
+      "Type or paste markdown here to preview and export as PDF.\n\n" +
+      "Tip: open this panel from a note's right-click menu, command palette,\n" +
+      "or keyboard shortcut to auto-load the active note.\n\n" +
       "Use /// on its own line for a manual page break.\n" +
       "Use --- for a horizontal rule.\n\n" +
       "Markdown tables:\n| Col A | Col B |\n|-------|-------|\n| Cell  | Cell  |";
@@ -1103,72 +1086,12 @@ class PDFExportView extends ItemView {
     });
 
     const renderBtn = topbar.createEl("button", { cls: "mpdf-btn", text: "⟳ Render PDF" });
-    renderBtn.title = "Render preview from current note (Ctrl+Enter)";
+    renderBtn.title = "Render preview (Ctrl+Enter)";
     renderBtn.addEventListener("click", () => this.render());
 
     const exportBtn = topbar.createEl("button", { cls: "mpdf-btn mpdf-btn-primary", text: "⬇ Export PDF" });
     exportBtn.addEventListener("click", () => void this.exportPDF());
   }
-
-  // ── Note loading ────────────────────────────────────────────────────────────
-
-  private async loadCurrentNote(): Promise<boolean> {
-    const mv = this.app.workspace.getActiveViewOfType(MarkdownView);
-    if (!mv?.file) return false;
-    if (mv.file === this.currentFile) return true;
-    this.currentFile = mv.file;
-    this.sourceLabel.textContent = mv.file.basename;
-    this.sourceLabel.title = mv.file.path;
-    return true;
-  }
-
-  private async tryRestoreFromState(): Promise<void> {
-    // Attempt 1: use saved path immediately.
-    if (this.pendingStatePath) {
-      const loaded = await this.loadFileByPath(this.pendingStatePath);
-      this.pendingStatePath = null;
-      if (loaded) return;
-    }
-    // Attempt 2: wait one frame for workspace layout restore to settle.
-    await new Promise<void>((res) => requestAnimationFrame(() => res()));
-    if (await this.loadCurrentNote()) return;
-    if (this.pendingStatePath) {
-      const loaded = await this.loadFileByPath(this.pendingStatePath);
-      this.pendingStatePath = null;
-      if (loaded) return;
-    }
-    // Attempt 3: 400 ms safety net for slow cold starts.
-    await new Promise<void>((res) => setTimeout(res, 400));
-    if (!await this.loadCurrentNote() && this.pendingStatePath) {
-      await this.loadFileByPath(this.pendingStatePath);
-      this.pendingStatePath = null;
-    }
-  }
-
-  private async loadFileByPath(path: string): Promise<boolean> {
-    const file = this.app.vault.getAbstractFileByPath(path);
-    if (!(file instanceof TFile)) return false;
-    this.currentFile = file;
-    this.sourceLabel.textContent = file.basename;
-    this.sourceLabel.title = file.path;
-    return true;
-  }
-
-  // Reads the current vault file and copies it into the edit textarea.
-  // This is the only way content gets into the editor — the user explicitly
-  // triggers it, so their prior edits are never silently overwritten.
-  private async copyNoteToEditor(): Promise<void> {
-    if (!this.currentFile) {
-      new Notice("No note is open. Open a markdown note first.");
-      return;
-    }
-    const content = await this.app.vault.read(this.currentFile);
-    this.editorEl.value = content;
-    const words = content.trim().split(/\s+/).filter(Boolean).length;
-    this.wordCountEl.textContent = `${words} words`;
-    this.editorEl.focus();
-  }
-
 
   private insertAtCursor(text: string) {
     const ta    = this.editorEl;
@@ -1176,7 +1099,6 @@ class PDFExportView extends ItemView {
     ta.value = ta.value.slice(0, start) + text + ta.value.slice(start);
     ta.selectionStart = ta.selectionEnd = start + text.length;
     ta.focus();
-    // No auto-render — user clicks Refresh when ready.
   }
 
   // ── Render ──────────────────────────────────────────────────────────────────
@@ -1189,6 +1111,15 @@ class PDFExportView extends ItemView {
   private async doRender(token: number) {
     const s = this.plugin.settings;
     let md = normalizeMarkdown(this.editorEl.value);
+
+    // Prepend the file name as an H1 title when the option is enabled and a
+    // file is loaded. This mirrors Obsidian's built-in "Include file name as
+    // title" PDF export option, so the rendered document leads with the note
+    // title even when the markdown itself contains no top-level heading.
+    if (s.includeFilenameAsTitle && this.currentFile) {
+      md = `# ${this.currentFile.basename}\n\n${md}`;
+    }
+
     if (s.autoBreakH1) md = md.replace(/\n(# )/g, "\n///\n$1");
     if (s.autoBreakH2) md = md.replace(/\n(## )/g, "\n///\n$1");
 
@@ -1209,7 +1140,7 @@ class PDFExportView extends ItemView {
     const sourcePath = this.currentFile?.path ?? "pdf-export";
 
     const sectionHtml = await Promise.all(
-      sections.map((sec) => renderMarkdownToHtml(this.app, sec.trim(), sourcePath, this)),
+      sections.map((sec) => renderMarkdownToHtml(this.app, sec.trim(), sourcePath, this.renderComponent)),
     );
 
     // Bail if a newer render has been requested while we were awaiting.
@@ -1337,7 +1268,7 @@ class PDFExportView extends ItemView {
   private async exportPDF() {
     const s = this.plugin.settings;
 
-    // Ensure we have a layout — run a full render if the panel was just opened.
+    // Ensure we have a layout — run a full render if the modal was just opened.
     if (!this.layoutCache) {
       await new Promise<void>((resolve) => {
         const token = ++this.renderToken;
@@ -1611,6 +1542,18 @@ class PDFExportSettingTab extends PluginSettingTab {
 
     // ── Behaviour ─────────────────────────────────────────────────────────────
     containerEl.createEl("h3", { text: "Behaviour" });
+    new Setting(containerEl)
+      .setName("Include file name as title")
+      .setDesc(
+        "Prepend the note's file name as an H1 heading at the top of the PDF. " +
+        "Mirrors Obsidian's built-in 'Include file name as title' export option.",
+      )
+      .addToggle((t) =>
+        t.setValue(s.includeFilenameAsTitle).onChange(async (v) => {
+          s.includeFilenameAsTitle = v;
+          await this.plugin.saveSettingsAndRender();
+        }),
+      );
     new Setting(containerEl).setName("Auto page break before H1").addToggle((t) =>
       t.setValue(s.autoBreakH1).onChange(async (v) => { s.autoBreakH1 = v; await this.plugin.saveSettingsAndRender(); }),
     );

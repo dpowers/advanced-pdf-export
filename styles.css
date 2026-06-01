@@ -1,5 +1,21 @@
 /* ── Obsidian Advanced PDF Export Plugin Styles ─────────────────────────── */
 
+/* ── Modal sizing ────────────────────────────────────────────────────────── */
+
+.mpdf-modal {
+  width: 92vw;
+  max-width: 1400px;
+  height: 88vh;
+  max-height: 88vh;
+  overflow: hidden;
+}
+
+.mpdf-modal .modal-content {
+  padding: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
 /* Top bar */
 .mpdf-topbar {
   display: flex;
@@ -108,7 +124,7 @@
   flex-shrink: 0;
 }
 
-/* Source file bar — compact single line: [↓ Replace] note-name.md */
+/* Source file bar */
 .mpdf-source-bar {
   display: flex;
   align-items: center;
@@ -120,10 +136,19 @@
   min-height: 28px;
 }
 
-.mpdf-btn-replace {
+.mpdf-btn-clear {
   padding: 2px 7px;
   font-size: 11px;
   flex-shrink: 0;
+  color: var(--text-error, #e05252);
+  border-color: var(--text-error, #e05252);
+  opacity: 0.75;
+}
+
+.mpdf-btn-clear:hover {
+  border-color: var(--text-error, #e05252) !important;
+  color: var(--text-error, #e05252) !important;
+  opacity: 1;
 }
 
 .mpdf-source-label {
@@ -214,4 +239,3 @@
   0 8px 32px rgba(0, 0, 0, 0.25);
   /* width/height/transform set inline */
 }
-
