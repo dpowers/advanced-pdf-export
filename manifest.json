@@ -1,7 +1,7 @@
 {
   "id": "advanced-pdf-export",
   "name": "Advanced PDF Export",
-  "version": "2.8.2",
+  "version": "2.9.0",
   "minAppVersion": "0.15.0",
   "description": "Export notes as pixel-perfect PDFs with live preview, style presets, manual page breaks, tables, and full layout control.",
   "author": "ShrekBytes",

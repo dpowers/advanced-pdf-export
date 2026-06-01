@@ -54,6 +54,7 @@ interface PDFExportSettings extends DocStyle {
   pageNumberPosition: "center" | "left" | "right";
   autoBreakH1: boolean;
   autoBreakH2: boolean;
+  includeFilenameAsTitle: boolean;
   previewScale: number;
 }
 
@@ -229,6 +230,7 @@ const DEFAULT_SETTINGS: PDFExportSettings = {
   pageNumberPosition: "right",
   autoBreakH1: false,
   autoBreakH2: false,
+  includeFilenameAsTitle: false,
   previewScale: 0.62,
 };
 
@@ -1189,6 +1191,15 @@ class PDFExportView extends ItemView {
   private async doRender(token: number) {
     const s = this.plugin.settings;
     let md = normalizeMarkdown(this.editorEl.value);
+
+    // Prepend the file name as an H1 title when the option is enabled and a
+    // file is loaded. This mirrors Obsidian's built-in "Include file name as
+    // title" PDF export option, so the rendered document leads with the note
+    // title even when the markdown itself contains no top-level heading.
+    if (s.includeFilenameAsTitle && this.currentFile) {
+      md = `# ${this.currentFile.basename}\n\n${md}`;
+    }
+
     if (s.autoBreakH1) md = md.replace(/\n(# )/g, "\n///\n$1");
     if (s.autoBreakH2) md = md.replace(/\n(## )/g, "\n///\n$1");
 
@@ -1611,6 +1622,18 @@ class PDFExportSettingTab extends PluginSettingTab {
 
     // ── Behaviour ─────────────────────────────────────────────────────────────
     containerEl.createEl("h3", { text: "Behaviour" });
+    new Setting(containerEl)
+      .setName("Include file name as title")
+      .setDesc(
+        "Prepend the note's file name as an H1 heading at the top of the PDF. " +
+        "Mirrors Obsidian's built-in 'Include file name as title' export option.",
+      )
+      .addToggle((t) =>
+        t.setValue(s.includeFilenameAsTitle).onChange(async (v) => {
+          s.includeFilenameAsTitle = v;
+          await this.plugin.saveSettingsAndRender();
+        }),
+      );
     new Setting(containerEl).setName("Auto page break before H1").addToggle((t) =>
       t.setValue(s.autoBreakH1).onChange(async (v) => { s.autoBreakH1 = v; await this.plugin.saveSettingsAndRender(); }),
     );
