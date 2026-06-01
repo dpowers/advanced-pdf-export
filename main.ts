@@ -1003,7 +1003,6 @@ class PDFExportView extends ItemView {
       this.editorEl.value = "";
       this.wordCountEl.textContent = "0 words";
       this.sourceLabel.textContent = "Click on a note and click copy to load it";
-      this.render();
     });
 
     this.sourceLabel = sourceBar.createEl("span", {
