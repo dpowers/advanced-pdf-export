@@ -994,6 +994,18 @@ class PDFExportView extends ItemView {
     copyBtn.title = "Replace editor contents with the current note";
     copyBtn.addEventListener("click", () => this.copyNoteToEditor());
 
+    const clearBtn = sourceBar.createEl("button", {
+      cls: "mpdf-btn mpdf-btn-clear",
+      text: "clear",
+    });
+    clearBtn.title = "Clear the editor";
+    clearBtn.addEventListener("click", () => {
+      this.editorEl.value = "";
+      this.wordCountEl.textContent = "0 words";
+      this.sourceLabel.textContent = "Click on a note and click copy to load it";
+      this.render();
+    });
+
     this.sourceLabel = sourceBar.createEl("span", {
       cls: "mpdf-source-label",
       text: "Click on a note and click copy to load it",

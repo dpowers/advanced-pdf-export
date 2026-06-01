@@ -126,6 +126,21 @@
   flex-shrink: 0;
 }
 
+.mpdf-btn-clear {
+  padding: 2px 7px;
+  font-size: 11px;
+  flex-shrink: 0;
+  color: var(--text-error, #e05252);
+  border-color: var(--text-error, #e05252);
+  opacity: 0.75;
+}
+
+.mpdf-btn-clear:hover {
+  border-color: var(--text-error, #e05252) !important;
+  color: var(--text-error, #e05252) !important;
+  opacity: 1;
+}
+
 .mpdf-source-label {
   font-size: 11px;
   color: var(--text-muted);
