@@ -250,7 +250,10 @@ function escapeHTML(s: string): string {
 function normalizeMarkdown(raw: string): string {
   return raw
     .replace(/\r\n/g, "\n")
-    .replace(/^>\s*\[\![^\]]+\].*(?:\n|$)/gmi, "");
+    // Strip entire Obsidian callout blocks: the `[!TYPE]` header line and all
+    // subsequent `>` body lines. Without the body group only the header was
+    // removed, leaving body lines to render as orphaned blockquotes.
+    .replace(/^>\s*\[\![^\]]+\].*(?:\n|$)(?:>.*(?:\n|$))*/gm, "");
 }
 
 function splitMarkdownSections(md: string): string[] {
@@ -1185,6 +1188,10 @@ class PDFExportModal extends Modal {
    * Without this guard the plain regex approach fires on `#` comment lines
    * inside Python, Shell, Ruby, etc. code blocks that happen to start with `# `.
    *
+   * Heading detection uses `^# ` / `^## ` anchored at the start of the line,
+   * so indented headings (`    # comment`), tab-indented lines, and tags with
+   * no trailing space (`#tag`) are all correctly ignored without extra logic.
+   *
    * Fencing rules (CommonMark §4.5):
    *   • A fence opens with a line beginning with 3+ back-ticks or 3+ tildes.
    *   • It closes with a line of the same character and at least the same length,
@@ -1500,8 +1507,14 @@ ${pageHTMLParts.join("\n")}
 </html>`;
 
     try {
-      const electron = (window as any).require("electron");
-      const remote   = electron.remote || electron;
+      // In Obsidian (Electron 14+) the `remote` module was moved out of the
+      // core `electron` package into the separate `@electron/remote` package.
+      // `electron.remote` is `undefined` on Electron 14+ (including Electron 39
+      // which ships with current Obsidian), so the old fallback
+      // `electron.remote || electron` silently used the plain `electron` object
+      // which has no `dialog` or `BrowserWindow` in the renderer process,
+      // causing every export to fail with the wrong error message.
+      const remote = (window as any).require("@electron/remote");
       if (!remote?.dialog) throw new Error("no remote");
 
       const res: { canceled: boolean; filePath?: string } = await remote.dialog.showSaveDialog({
