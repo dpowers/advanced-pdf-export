@@ -110,7 +110,7 @@ const PRESETS: Record<string, DocStyle> = {
   },
   minimal: {
     name: "Minimal",
-    fontFamily: "'Helvetica Neue', Arial, sans-serif",
+    fontFamily: "'Helvetica Neue', Helvetica, sans-serif",
     fontSize: 12,
     lineHeight: 1.6,
     paragraphSpacing: 0.45,
@@ -173,7 +173,7 @@ const PRESETS: Record<string, DocStyle> = {
   },
   modern: {
     name: "Modern",
-    fontFamily: "Arial, 'Helvetica Neue', sans-serif",
+    fontFamily: "Arial, sans-serif",
     fontSize: 13,
     lineHeight: 1.75,
     paragraphSpacing: 0.6,
@@ -296,9 +296,6 @@ function slugifyHeading(text: string): string {
  * 2. Strips the `external-link` class from <a> elements so Obsidian's theme
  *    CSS never gets a chance to inject the ↗ icon (works even when the theme
  *    rule has higher specificity than our own `.mpdf-doc` scoped rule).
- * 3. Sets a `title` attribute on every internal `<a href="#…">` to the text
- *    of the heading it points to, so both the preview tooltip and the PDF
- *    viewer tooltip show "Overview" instead of a generic "go to page N".
  */
 function postProcessRenderedHTML(root: HTMLElement): void {
   // ── Pass 1: assign heading IDs ────────────────────────────────────────────
@@ -858,17 +855,16 @@ export default class MarkdownPDFPlugin extends Plugin {
 
   async onload() {
     await this.loadSettings();
-    this.addRibbonIcon("file-output", "Advanced PDF Export", () => this.openModal());
     this.addCommand({
       id: "open-advanced-pdf-export",
-      name: "Open Advanced PDF Export",
+      name: "Advanced PDF Export: Open Panel",
       callback: () => this.openModal(),
     });
     this.registerEvent(
       this.app.workspace.on("file-menu", (menu: Menu, file) => {
         if (!(file instanceof TFile) || file.extension !== "md") return;
         menu.addItem((item) =>
-          item.setTitle("Export as PDF").setIcon("file-output")
+          item.setTitle("Advanced PDF Export: Open Panel").setIcon("file-output")
               .onClick(() => this.openModal(file)),
         );
       }),
@@ -914,7 +910,6 @@ class PDFExportModal extends Modal {
   private editorEl: HTMLTextAreaElement;
   private previewEl: HTMLElement;
   private pageCountEl: HTMLElement;
-  private wordCountEl: HTMLElement;
   private noteTitleEl: HTMLElement;
 
   // Owned Component for MarkdownRenderer — loaded on open, unloaded on close.
@@ -948,7 +943,6 @@ class PDFExportModal extends Modal {
       this.currentFile = file;
       const content = await this.app.vault.read(file);
       this.editorEl.value = content;
-      this.wordCountEl.textContent = `${content.trim().split(/\s+/).filter(Boolean).length} words`;
       this.noteTitleEl.textContent = file.basename;
       this.noteTitleEl.title = file.path;
       this.render();
@@ -981,17 +975,7 @@ class PDFExportModal extends Modal {
       "Use --- for a horizontal rule.\n\n" +
       "Markdown tables:\n| Col A | Col B |\n|-------|-------|\n| Cell  | Cell  |";
 
-    const foot = editorPanel.createEl("div", { cls: "mpdf-editor-footer" });
-    this.wordCountEl = foot.createEl("span", { text: "0 words" });
-    foot.createEl("span", { text: "/// = page break · --- = rule" });
-
     this.previewEl = main.createEl("div", { cls: "mpdf-preview" });
-
-    // Update word count live as the user types — no render triggered.
-    this.editorEl.addEventListener("input", () => {
-      const words = this.editorEl.value.trim().split(/\s+/).filter(Boolean).length;
-      this.wordCountEl.textContent = `${words} words`;
-    });
 
     // Keyboard shortcut: Ctrl+Enter / Cmd+Enter to trigger a manual refresh.
     this.editorEl.addEventListener("keydown", (e) => {
@@ -1065,7 +1049,7 @@ class PDFExportModal extends Modal {
       this.renderPreviewOnly();
     });
 
-    const breakBtn = left.createEl("button", { cls: "mpdf-btn", text: "Break" });
+    const breakBtn = left.createEl("button", { cls: "mpdf-btn", text: "Insert Page Break" });
     breakBtn.title = "Insert page break (///)";
     breakBtn.addEventListener("click", () => this.insertAtCursor("\n///\n"));
 
@@ -1151,7 +1135,6 @@ class PDFExportModal extends Modal {
 
     this.drawPreview(this.layoutCache, s.previewScale);
     this.pageCountEl.textContent = `${layouts.length} page${layouts.length !== 1 ? "s" : ""}`;
-    this.wordCountEl.textContent = `${this.editorEl.value.trim().split(/\s+/).filter(Boolean).length} words`;
   }
 
   // Re-draw from the cached layout without re-paginating (zoom-only change).

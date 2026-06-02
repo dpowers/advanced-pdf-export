@@ -177,18 +177,6 @@
   color: var(--text-faint);
 }
 
-.mpdf-editor-footer {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 4px 12px;
-  border-top: 1px solid var(--background-modifier-border);
-  font-size: 11px;
-  color: var(--text-faint);
-  flex-shrink: 0;
-  background: var(--background-secondary);
-}
-
 /* Preview panel */
 .mpdf-preview {
   flex: 1;
