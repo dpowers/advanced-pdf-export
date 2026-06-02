@@ -857,7 +857,7 @@ export default class MarkdownPDFPlugin extends Plugin {
     await this.loadSettings();
     this.addCommand({
       id: "open-advanced-pdf-export",
-      name: "Advanced PDF Export: Open Panel",
+      name: "Open Panel",
       callback: () => this.openModal(),
     });
     this.registerEvent(
@@ -911,6 +911,9 @@ class PDFExportModal extends Modal {
   private previewEl: HTMLElement;
   private pageCountEl: HTMLElement;
   private noteTitleEl: HTMLElement;
+  private renderBtn!: HTMLButtonElement;
+  private exportBtn!: HTMLButtonElement;
+  private loadingOverlayEl!: HTMLElement;
 
   // Owned Component for MarkdownRenderer — loaded on open, unloaded on close.
   private renderComponent = new Component();
@@ -919,6 +922,8 @@ class PDFExportModal extends Modal {
   private currentFile: TFile | null = null;
   private renderToken = 0;
   private layoutCache: LayoutCache | null = null;
+  // Debounce handle for settings-driven re-renders; cleared on close.
+  private renderDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(app: App, plugin: MarkdownPDFPlugin, file?: TFile) {
     super(app);
@@ -945,11 +950,20 @@ class PDFExportModal extends Modal {
       this.editorEl.value = content;
       this.noteTitleEl.textContent = file.basename;
       this.noteTitleEl.title = file.path;
-      this.render();
+      // Show the loading overlay right away so the panel feels instantly open,
+      // then yield two animation frames so the browser can paint the modal and
+      // textarea content before the heavy pagination work starts.
+      this.showLoading();
+      await new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())));
+      this.render(true);
     }
   }
 
   onClose() {
+    if (this.renderDebounceTimer !== null) {
+      clearTimeout(this.renderDebounceTimer);
+      this.renderDebounceTimer = null;
+    }
     this.renderComponent.unload();
     this.plugin.activeModal = null;
     this.currentFile        = null;
@@ -975,13 +989,23 @@ class PDFExportModal extends Modal {
       "Use --- for a horizontal rule.\n\n" +
       "Markdown tables:\n| Col A | Col B |\n|-------|-------|\n| Cell  | Cell  |";
 
-    this.previewEl = main.createEl("div", { cls: "mpdf-preview" });
+    // Wrap the preview in a container so the loading overlay (absolutely
+    // positioned) stays fixed over the viewport portion instead of scrolling
+    // along with the page thumbnails.
+    const previewContainer = main.createEl("div", { cls: "mpdf-preview-container" });
+    this.previewEl = previewContainer.createEl("div", { cls: "mpdf-preview" });
+
+    // Loading overlay — hidden by default, shown while rendering.
+    this.loadingOverlayEl = previewContainer.createEl("div", { cls: "mpdf-loading-overlay" });
+    this.loadingOverlayEl.style.display = "none";
+    this.loadingOverlayEl.createEl("div", { cls: "mpdf-spinner" });
+    this.loadingOverlayEl.createEl("span", { cls: "mpdf-loading-text", text: "Rendering…" });
 
     // Keyboard shortcut: Ctrl+Enter / Cmd+Enter to trigger a manual refresh.
     this.editorEl.addEventListener("keydown", (e) => {
       if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
         e.preventDefault();
-        this.render();
+        this.render(true);
       }
     });
   }
@@ -1064,12 +1088,12 @@ class PDFExportModal extends Modal {
       settings?.openTabById?.("advanced-pdf-export");
     });
 
-    const renderBtn = right.createEl("button", { cls: "mpdf-btn", text: "⟳ Render PDF" });
-    renderBtn.title = "Render preview (Ctrl+Enter)";
-    renderBtn.addEventListener("click", () => this.render());
+    this.renderBtn = right.createEl("button", { cls: "mpdf-btn", text: "⟳ Render PDF" });
+    this.renderBtn.title = "Render preview (Ctrl+Enter)";
+    this.renderBtn.addEventListener("click", () => this.render(true));
 
-    const exportBtn = right.createEl("button", { cls: "mpdf-btn mpdf-btn-primary", text: "⬇ Export PDF" });
-    exportBtn.addEventListener("click", () => void this.exportPDF());
+    this.exportBtn = right.createEl("button", { cls: "mpdf-btn mpdf-btn-primary", text: "⬇ Export PDF" });
+    this.exportBtn.addEventListener("click", () => void this.exportPDF());
   }
 
   private insertAtCursor(text: string) {
@@ -1082,9 +1106,39 @@ class PDFExportModal extends Modal {
 
   // ── Render ──────────────────────────────────────────────────────────────────
 
-  render() {
+  /**
+   * Schedule a render.
+   *
+   * @param immediate  When true (button click, Ctrl+Enter, initial open) the
+   *                   render starts on the very next animation frame.
+   *                   When false (settings changes) a 150 ms debounce is
+   *                   applied so rapid successive changes collapse into one
+   *                   render instead of hammering the paginator.
+   *
+   * Either way the loading overlay is shown right away so the UI never looks
+   * frozen — the user always gets visual feedback that work is in progress.
+   */
+  render(immediate = false) {
     const token = ++this.renderToken;
-    requestAnimationFrame(() => void this.doRender(token));
+    // Cancel any pending debounced render — this one supersedes it.
+    if (this.renderDebounceTimer !== null) {
+      clearTimeout(this.renderDebounceTimer);
+      this.renderDebounceTimer = null;
+    }
+    // Show the loading state before any async gap so the UI responds instantly.
+    this.showLoading();
+    if (immediate) {
+      // Two rAFs are required: the first fires before the browser paints,
+      // the second fires after. Without the second one the heavy synchronous
+      // pagination work in doRender blocks the thread before the browser ever
+      // gets a chance to render the spinner/disabled-button state.
+      requestAnimationFrame(() => requestAnimationFrame(() => void this.doRender(token)));
+    } else {
+      this.renderDebounceTimer = setTimeout(() => {
+        this.renderDebounceTimer = null;
+        requestAnimationFrame(() => requestAnimationFrame(() => void this.doRender(token)));
+      }, 150);
+    }
   }
 
   private async doRender(token: number) {
@@ -1135,12 +1189,30 @@ class PDFExportModal extends Modal {
 
     this.drawPreview(this.layoutCache, s.previewScale);
     this.pageCountEl.textContent = `${layouts.length} page${layouts.length !== 1 ? "s" : ""}`;
+    // Render finished — restore the UI to its interactive state.
+    this.hideLoading();
   }
 
   // Re-draw from the cached layout without re-paginating (zoom-only change).
   private renderPreviewOnly() {
     if (!this.layoutCache) return;
     this.drawPreview(this.layoutCache, this.plugin.settings.previewScale);
+  }
+
+  // ── Loading state helpers ────────────────────────────────────────────────────
+
+  /** Show the spinning overlay and disable the Render button. */
+  private showLoading() {
+    this.loadingOverlayEl.style.display = "flex";
+    this.renderBtn.disabled = true;
+    this.renderBtn.textContent = "Rendering…";
+  }
+
+  /** Hide the spinning overlay and restore the Render button. */
+  private hideLoading() {
+    this.loadingOverlayEl.style.display = "none";
+    this.renderBtn.disabled = false;
+    this.renderBtn.textContent = "⟳ Render PDF";
   }
 
   private drawPreview(c: LayoutCache, scale: number) {
@@ -1246,6 +1318,16 @@ class PDFExportModal extends Modal {
   private async exportPDF() {
     const s = this.plugin.settings;
 
+    // Disable the export button immediately so the user knows work is happening.
+    this.exportBtn.disabled = true;
+    this.exportBtn.textContent = "⬇ Exporting…";
+
+    // Helper to restore the button in every exit path.
+    const resetExportBtn = () => {
+      this.exportBtn.disabled = false;
+      this.exportBtn.textContent = "⬇ Export PDF";
+    };
+
     // Ensure we have a layout — run a full render if the modal was just opened.
     if (!this.layoutCache) {
       await new Promise<void>((resolve) => {
@@ -1257,6 +1339,7 @@ class PDFExportModal extends Modal {
     const cache = this.layoutCache;
     if (!cache || cache.layouts.length === 0) {
       new Notice("Nothing to export.");
+      resetExportBtn();
       return;
     }
 
@@ -1318,7 +1401,13 @@ ${pageHTMLParts.join("\n")}
         defaultPath: (this.currentFile?.basename ?? "export") + ".pdf",
         filters: [{ name: "PDF", extensions: ["pdf"] }],
       });
-      if (res.canceled || !res.filePath) return;
+      if (res.canceled || !res.filePath) {
+        resetExportBtn();
+        return;
+      }
+
+      // Let the user know the hidden window is generating the PDF.
+      new Notice("Generating PDF…");
 
       const blob = new Blob([fullHTML], { type: "text/html" });
       const url  = URL.createObjectURL(blob);
@@ -1334,16 +1423,19 @@ ${pageHTMLParts.join("\n")}
               else     new Notice("✓ PDF saved: " + res.filePath);
               win.close();
               URL.revokeObjectURL(url);
+              resetExportBtn();
             });
           })
           .catch((err: Error) => {
             new Notice("PDF render error: " + err.message);
             win.close();
             URL.revokeObjectURL(url);
+            resetExportBtn();
           });
       });
     } catch {
       new Notice("Advanced PDF export requires the Obsidian desktop app.");
+      resetExportBtn();
     }
   }
 }

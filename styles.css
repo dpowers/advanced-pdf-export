@@ -133,6 +133,14 @@
   height: 16px;
 }
 
+/* Disabled state — used while rendering or exporting */
+.mpdf-btn:disabled,
+.mpdf-btn-primary:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
 .mpdf-page-count {
   font-size: 11px;
   color: var(--text-muted);
@@ -177,6 +185,16 @@
   color: var(--text-faint);
 }
 
+/* Preview container — wraps the scrollable preview and the non-scrolling
+   loading overlay as siblings so the overlay never scrolls with the pages. */
+.mpdf-preview-container {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
 /* Preview panel */
 .mpdf-preview {
   flex: 1;
@@ -187,6 +205,44 @@
   align-items: center;
   padding: 28px 20px 48px; /* extra bottom so last page label isn't clipped */
   gap: 24px;
+}
+
+/* Loading overlay — sits on top of the preview, hidden by default.
+   Shown (display:flex) whenever a render or initial open is in progress. */
+.mpdf-loading-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.38);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+  display: none; /* toggled to flex in JS */
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  z-index: 20;
+  pointer-events: none; /* let clicks through to cancel/settings while loading */
+}
+
+.mpdf-spinner {
+  width: 34px;
+  height: 34px;
+  border: 3px solid rgba(255, 255, 255, 0.12);
+  border-top-color: var(--interactive-accent);
+  border-radius: 50%;
+  animation: mpdf-spin 0.65s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes mpdf-spin {
+  to { transform: rotate(360deg); }
+}
+
+.mpdf-loading-text {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.65);
+  font-family: var(--font-interface);
+  letter-spacing: 0.02em;
 }
 
 /* Page wrapper — width/height set inline to match the scaled page footprint */
