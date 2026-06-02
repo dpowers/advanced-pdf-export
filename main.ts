@@ -1,5 +1,5 @@
 import {
-  App, Component, MarkdownRenderer, MarkdownView, Modal, Notice,
+  App, Component, MarkdownRenderer, MarkdownView, Menu, Modal, Notice,
   Plugin, PluginSettingTab, Setting, TFile, setIcon,
 } from "obsidian";
 
@@ -56,15 +56,15 @@ interface PDFExportSettings extends DocStyle {
   previewScale: number;
 }
 
-// Typed cache for the last render — avoids JSON round-trips.
+// Typed layout cache — avoids re-paginating on zoom-only changes.
+// fontFamily and accentColor are cached so zoom redraws stay consistent
+// with the paginated body even if settings are changed in the interim.
 interface LayoutCache {
   layouts: PageLayout[];
   pw: number;
   ph: number;
   mTop: number;
-  mBottom: number;
   mLeft: number;
-  mRight: number;
   footerH: number;
   headerH: number;
   contentW: number;
@@ -864,6 +864,15 @@ export default class MarkdownPDFPlugin extends Plugin {
       name: "Open Advanced PDF Export",
       callback: () => this.openModal(),
     });
+    this.registerEvent(
+      this.app.workspace.on("file-menu", (menu: Menu, file) => {
+        if (!(file instanceof TFile) || file.extension !== "md") return;
+        menu.addItem((item) =>
+          item.setTitle("Export as PDF").setIcon("file-output")
+              .onClick(() => this.openModal(file)),
+        );
+      }),
+    );
     this.addSettingTab(new PDFExportSettingTab(this.app, this));
   }
 
@@ -871,10 +880,10 @@ export default class MarkdownPDFPlugin extends Plugin {
     this.activeModal?.close();
   }
 
-  openModal() {
-    // Close any existing instance before opening a fresh one.
+  /** Open the modal, optionally pre-loading a specific file. */
+  openModal(file?: TFile) {
     if (this.activeModal) this.activeModal.close();
-    new PDFExportModal(this.app, this).open();
+    new PDFExportModal(this.app, this, file).open();
   }
 
   async loadSettings() {
@@ -906,19 +915,20 @@ class PDFExportModal extends Modal {
   private previewEl: HTMLElement;
   private pageCountEl: HTMLElement;
   private wordCountEl: HTMLElement;
-  private sourceLabel: HTMLElement;
+  private noteTitleEl: HTMLElement;
 
-  // Owned Component passed to MarkdownRenderer.render — loaded on open,
-  // unloaded on close so any child components are cleaned up properly.
+  // Owned Component for MarkdownRenderer — loaded on open, unloaded on close.
   private renderComponent = new Component();
 
+  private readonly initialFile: TFile | null;
   private currentFile: TFile | null = null;
   private renderToken = 0;
   private layoutCache: LayoutCache | null = null;
 
-  constructor(app: App, plugin: MarkdownPDFPlugin) {
+  constructor(app: App, plugin: MarkdownPDFPlugin, file?: TFile) {
     super(app);
     this.plugin = plugin;
+    this.initialFile = file ?? null;
   }
 
   async onOpen() {
@@ -928,16 +938,19 @@ class PDFExportModal extends Modal {
     this.contentEl.style.cssText = "display:flex;flex-direction:column;height:100%;padding:0;overflow:hidden;";
     this.buildUI(this.contentEl);
 
-    // Auto-load the active note if one is open. If not, the editor is empty
-    // and the user can type freely or paste any markdown.
-    const mv = this.app.workspace.getActiveViewOfType(MarkdownView);
-    if (mv?.file) {
-      this.currentFile = mv.file;
-      const content = await this.app.vault.read(mv.file);
+    // Prefer the file passed explicitly (e.g. from the right-click menu),
+    // then fall back to whatever note is currently open in the editor.
+    const file = this.initialFile
+      ?? this.app.workspace.getActiveViewOfType(MarkdownView)?.file
+      ?? null;
+
+    if (file) {
+      this.currentFile = file;
+      const content = await this.app.vault.read(file);
       this.editorEl.value = content;
       this.wordCountEl.textContent = `${content.trim().split(/\s+/).filter(Boolean).length} words`;
-      this.sourceLabel.textContent = mv.file.basename;
-      this.sourceLabel.title = mv.file.path;
+      this.noteTitleEl.textContent = file.basename;
+      this.noteTitleEl.title = file.path;
       this.render();
     }
   }
@@ -958,26 +971,6 @@ class PDFExportModal extends Modal {
     const main = container.createEl("div", { cls: "mpdf-main" });
 
     const editorPanel = main.createEl("div", { cls: "mpdf-editor-panel" });
-
-    // ── Source file bar ───────────────────────────────────────────────────────
-    const sourceBar = editorPanel.createEl("div", { cls: "mpdf-source-bar" });
-
-    const clearBtn = sourceBar.createEl("button", {
-      cls: "mpdf-btn mpdf-btn-clear",
-      text: "clear",
-    });
-    clearBtn.title = "Clear the editor";
-    clearBtn.addEventListener("click", () => {
-      this.editorEl.value = "";
-      this.wordCountEl.textContent = "0 words";
-      this.sourceLabel.textContent = "—";
-      this.currentFile = null;
-    });
-
-    this.sourceLabel = sourceBar.createEl("span", {
-      cls: "mpdf-source-label",
-      text: "—",
-    });
 
     this.editorEl = editorPanel.createEl("textarea", { cls: "mpdf-editor" });
     this.editorEl.placeholder =
@@ -1010,13 +1003,17 @@ class PDFExportModal extends Modal {
   }
 
   private buildTopbar(topbar: HTMLElement, s: PDFExportSettings) {
+    const left  = topbar.createEl("div", { cls: "mpdf-topbar-left" });
+    this.noteTitleEl = topbar.createEl("div", { cls: "mpdf-topbar-title", text: "—" });
+    const right = topbar.createEl("div", { cls: "mpdf-topbar-right" });
+
     const makeSelect = (
       label: string,
       opts: Record<string, string>,
       val: string,
       cb: (v: string) => Promise<void>,
     ) => {
-      const wrap = topbar.createEl("div", { cls: "mpdf-ctrl" });
+      const wrap = left.createEl("div", { cls: "mpdf-ctrl" });
       wrap.createEl("span", { cls: "mpdf-ctrl-label", text: label });
       const el = wrap.createEl("select", { cls: "mpdf-select" });
       for (const [v, t] of Object.entries(opts)) {
@@ -1047,7 +1044,7 @@ class PDFExportModal extends Modal {
       },
     );
 
-    const zoomWrap = topbar.createEl("div", { cls: "mpdf-ctrl" });
+    const zoomWrap = left.createEl("div", { cls: "mpdf-ctrl" });
     zoomWrap.createEl("span", { cls: "mpdf-ctrl-label", text: "Zoom" });
     const zoomLabel = zoomWrap.createEl("span", {
       cls: "mpdf-ctrl-label",
@@ -1068,15 +1065,13 @@ class PDFExportModal extends Modal {
       this.renderPreviewOnly();
     });
 
-    const breakBtn = topbar.createEl("button", { cls: "mpdf-btn", text: "Break" });
+    const breakBtn = left.createEl("button", { cls: "mpdf-btn", text: "Break" });
     breakBtn.title = "Insert page break (///)";
     breakBtn.addEventListener("click", () => this.insertAtCursor("\n///\n"));
 
-    topbar.createEl("div").style.flex = "1"; // spacer
+    this.pageCountEl = right.createEl("span", { cls: "mpdf-page-count", text: "— pages" });
 
-    this.pageCountEl = topbar.createEl("span", { cls: "mpdf-page-count", text: "— pages" });
-
-    const settingsBtn = topbar.createEl("button", { cls: "mpdf-btn mpdf-btn-icon" });
+    const settingsBtn = right.createEl("button", { cls: "mpdf-btn mpdf-btn-icon" });
     settingsBtn.setAttr("aria-label", "Open Advanced PDF Export settings");
     setIcon(settingsBtn, "settings");
     settingsBtn.addEventListener("click", () => {
@@ -1085,11 +1080,11 @@ class PDFExportModal extends Modal {
       settings?.openTabById?.("advanced-pdf-export");
     });
 
-    const renderBtn = topbar.createEl("button", { cls: "mpdf-btn", text: "⟳ Render PDF" });
+    const renderBtn = right.createEl("button", { cls: "mpdf-btn", text: "⟳ Render PDF" });
     renderBtn.title = "Render preview (Ctrl+Enter)";
     renderBtn.addEventListener("click", () => this.render());
 
-    const exportBtn = topbar.createEl("button", { cls: "mpdf-btn mpdf-btn-primary", text: "⬇ Export PDF" });
+    const exportBtn = right.createEl("button", { cls: "mpdf-btn mpdf-btn-primary", text: "⬇ Export PDF" });
     exportBtn.addEventListener("click", () => void this.exportPDF());
   }
 
@@ -1152,7 +1147,7 @@ class PDFExportModal extends Modal {
     }
 
     const layouts = buildPageLayouts(allPages, s);
-    this.layoutCache = { layouts, pw, ph, mTop, mBottom, mLeft, mRight, footerH, headerH, contentW, contentH, docCSS, fontFamily: s.fontFamily, accentColor: s.accentColor };
+    this.layoutCache = { layouts, pw, ph, mTop, mLeft, footerH, headerH, contentW, contentH, docCSS, fontFamily: s.fontFamily, accentColor: s.accentColor };
 
     this.drawPreview(this.layoutCache, s.previewScale);
     this.pageCountEl.textContent = `${layouts.length} page${layouts.length !== 1 ? "s" : ""}`;
@@ -1166,7 +1161,7 @@ class PDFExportModal extends Modal {
   }
 
   private drawPreview(c: LayoutCache, scale: number) {
-    const { layouts, pw, ph, mTop, mLeft, footerH, headerH, contentW, contentH, docCSS, accentColor } = c;
+    const { layouts, pw, ph, mTop, mLeft, footerH, headerH, contentW, contentH, docCSS, fontFamily, accentColor } = c;
     const s = this.plugin.settings;
     this.previewEl.empty();
 
@@ -1211,7 +1206,7 @@ class PDFExportModal extends Modal {
         hdr.textContent = layout.headerText;
         hdr.style.cssText = [
           "position:absolute", `top:${mTop * 0.4}px`, `right:${mLeft}px`,
-          "font-size:9px", "color:#999", `font-family:${s.fontFamily}`, "white-space:nowrap",
+          "font-size:9px", "color:#999", `font-family:${fontFamily}`, "white-space:nowrap",
         ].join(";");
       }
 
@@ -1241,7 +1236,7 @@ class PDFExportModal extends Modal {
           "position:absolute", "bottom:0", "left:0", "right:0",
           `height:${footerH}px`, "display:flex", "align-items:center",
           `border-top:0.5px solid ${accentColor}33`,
-          `padding:0 ${mLeft}px`, "font-size:9px", "color:#aaa", `font-family:${s.fontFamily}`,
+          `padding:0 ${mLeft}px`, "font-size:9px", "color:#aaa", `font-family:${fontFamily}`,
         ].join(";");
 
         if (layout.footerCenter) {
@@ -1282,13 +1277,13 @@ class PDFExportModal extends Modal {
       return;
     }
 
-    const { layouts, pw, ph, mTop, mLeft, footerH, headerH, contentW, docCSS } = cache;
+    const { layouts, pw, ph, mTop, mLeft, footerH, headerH, contentW, docCSS, fontFamily, accentColor: exportAccent } = cache;
 
     const pageHTMLParts = layouts.map((layout) => {
       const contentHTML = layout.pageNodes.map((n) => (n as HTMLElement).outerHTML).join("\n");
 
       const headerHTML = s.showHeader && layout.headerText
-        ? `<div style="position:absolute;top:${mTop * 0.4}px;right:${mLeft}px;font-size:9px;color:#999;font-family:${s.fontFamily};white-space:nowrap;">${escapeHTML(layout.headerText)}</div>`
+        ? `<div style="position:absolute;top:${mTop * 0.4}px;right:${mLeft}px;font-size:9px;color:#999;font-family:${fontFamily};white-space:nowrap;">${escapeHTML(layout.headerText)}</div>`
         : "";
 
       const footerInnerHTML = layout.footerCenter
@@ -1296,7 +1291,7 @@ class PDFExportModal extends Modal {
         : `<span>${escapeHTML(layout.footerLeft)}</span><span style="margin-left:auto;">${escapeHTML(layout.footerRight)}</span>`;
 
       const footerHTML = s.showFooter
-        ? `<div style="position:absolute;bottom:0;left:0;right:0;height:${footerH}px;display:flex;align-items:center;border-top:0.5px solid ${cache.accentColor}33;padding:0 ${mLeft}px;font-size:9px;color:#aaa;font-family:${s.fontFamily};">${footerInnerHTML}</div>`
+        ? `<div style="position:absolute;bottom:0;left:0;right:0;height:${footerH}px;display:flex;align-items:center;border-top:0.5px solid ${exportAccent}33;padding:0 ${mLeft}px;font-size:9px;color:#aaa;font-family:${fontFamily};">${footerInnerHTML}</div>`
         : "";
 
       const contentDivHTML = `<div class="mpdf-doc" style="position:absolute;top:${mTop + headerH}px;left:${mLeft}px;width:${contentW}px;">${contentHTML}</div>`;
