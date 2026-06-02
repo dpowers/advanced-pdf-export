@@ -302,7 +302,7 @@ function postProcessRenderedHTML(root: HTMLElement): void {
   const seen = new Map<string, number>();
 
   root.querySelectorAll("h1,h2,h3,h4,h5,h6").forEach((el) => {
-    const text = (el as HTMLElement).innerText || el.textContent || "";
+    const text = el.textContent || "";
     const base = slugifyHeading(text);
     if (!base) return;
     const count = seen.get(base) ?? 0;
@@ -324,13 +324,32 @@ function postProcessRenderedHTML(root: HTMLElement): void {
 // Single source of truth used by both the live preview and the exported PDF.
 // The selector is always `.mpdf-doc` so both pipelines get identical styles.
 
+/**
+ * Returns the relative luminance (0–1) of a CSS hex color (#rrggbb or #rgb).
+ * Used to pick readable table-header text regardless of which preset or custom
+ * color is active.  Non-hex values (e.g. named colors) return 1 (treat as
+ * light) so we fall back to the heading color rather than forcing white.
+ */
+function hexLuminance(hex: string): number {
+  const full = hex.replace(
+    /^#([\da-f])([\da-f])([\da-f])$/i,
+    (_, r, g, b) => `#${r}${r}${g}${g}${b}${b}`,
+  );
+  if (!/^#[\da-f]{6}$/i.test(full)) return 1;
+  const linearize = (c: number) =>
+    c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  const r = linearize(parseInt(full.slice(1, 3), 16) / 255);
+  const g = linearize(parseInt(full.slice(3, 5), 16) / 255);
+  const b = linearize(parseInt(full.slice(5, 7), 16) / 255);
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
 function buildDocCSS(s: PDFExportSettings): string {
   const hs = s.headingScale;
-  // Presets with dark table headers need white text; others use heading colour.
+  // Choose white or heading-colour text based on the actual background
+  // luminance, so customised colours work correctly regardless of preset name.
   const tableHeaderTextColor =
-    s.preset === "modern" || s.preset === "newspaper" || s.preset === "colorful"
-      ? "#fff"
-      : s.headingColor;
+    hexLuminance(s.tableHeaderBg) < 0.35 ? "#fff" : s.headingColor;
 
   return `
   .mpdf-doc {
@@ -765,55 +784,58 @@ function paginateHTML(
   document.body.appendChild(sandbox);
 
   const pages: HTMLElement[][] = [];
-  let currentPage: HTMLElement[] = [];
-  const children = Array.from(inner.children) as HTMLElement[];
-  let idx = 0;
+  try {
+    let currentPage: HTMLElement[] = [];
+    const children = Array.from(inner.children) as HTMLElement[];
+    let idx = 0;
 
-  while (idx < children.length) {
-    const child = children[idx];
-    const fits = makeFitFn(currentPage, measure, contentHeightPx);
+    while (idx < children.length) {
+      const child = children[idx];
+      const fits = makeFitFn(currentPage, measure, contentHeightPx);
 
-    if (fits(child.cloneNode(true) as HTMLElement)) {
-      currentPage.push(child.cloneNode(true) as HTMLElement);
-      idx++;
-      continue;
-    }
-
-    // Element doesn't fit on the current page. Try splitting it.
-    const forceSplit = currentPage.length === 0;
-    const split = splitElement(child, fits, forceSplit);
-    if (split) {
-      currentPage.push(split[0]);
-      pages.push(currentPage);
-      currentPage = [];
-      // Replace current child with the remainder for re-processing.
-      const remainder = split[1];
-      if (remainder.textContent?.trim() || remainder.children.length > 0) {
-        children[idx] = remainder;
-      } else {
+      if (fits(child.cloneNode(true) as HTMLElement)) {
+        currentPage.push(child.cloneNode(true) as HTMLElement);
         idx++;
+        continue;
       }
-      continue;
-    }
 
-    // Can't split. If there's content on this page, flush it and retry the
-    // same element on a fresh full-height page.
-    if (currentPage.length > 0) {
+      // Element doesn't fit on the current page. Try splitting it.
+      const forceSplit = currentPage.length === 0;
+      const split = splitElement(child, fits, forceSplit);
+      if (split) {
+        currentPage.push(split[0]);
+        pages.push(currentPage);
+        currentPage = [];
+        // Replace current child with the remainder for re-processing.
+        const remainder = split[1];
+        if (remainder.textContent?.trim() || remainder.children.length > 0) {
+          children[idx] = remainder;
+        } else {
+          idx++;
+        }
+        continue;
+      }
+
+      // Can't split. If there's content on this page, flush it and retry the
+      // same element on a fresh full-height page.
+      if (currentPage.length > 0) {
+        pages.push(currentPage);
+        currentPage = [];
+        continue;
+      }
+
+      // Element is alone on an empty page and truly unsplittable (e.g. a giant
+      // image). Force it onto its own page and advance so we never stall.
+      currentPage.push(child.cloneNode(true) as HTMLElement);
       pages.push(currentPage);
       currentPage = [];
-      continue;
+      idx++;
     }
 
-    // Element is alone on an empty page and truly unsplittable (e.g. a giant
-    // image). Force it onto its own page and advance so we never stall.
-    currentPage.push(child.cloneNode(true) as HTMLElement);
-    pages.push(currentPage);
-    currentPage = [];
-    idx++;
+    if (currentPage.length > 0) pages.push(currentPage);
+  } finally {
+    document.body.removeChild(sandbox);
   }
-
-  if (currentPage.length > 0) pages.push(currentPage);
-  document.body.removeChild(sandbox);
   return pages.length > 0 ? pages : [[]];
 }
 
@@ -1099,7 +1121,8 @@ class PDFExportModal extends Modal {
   private insertAtCursor(text: string) {
     const ta    = this.editorEl;
     const start = ta.selectionStart;
-    ta.value = ta.value.slice(0, start) + text + ta.value.slice(start);
+    const end   = ta.selectionEnd;
+    ta.value = ta.value.slice(0, start) + text + ta.value.slice(end);
     ta.selectionStart = ta.selectionEnd = start + text.length;
     ta.focus();
   }
@@ -1127,18 +1150,90 @@ class PDFExportModal extends Modal {
     }
     // Show the loading state before any async gap so the UI responds instantly.
     this.showLoading();
+
+    // Shared error handler: if doRender throws (e.g. MarkdownRenderer fails),
+    // restore the UI rather than leaving the loading overlay up forever.
+    const safeDo = () =>
+      this.doRender(token).catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error("[advanced-pdf-export] render error:", err);
+        this.hideLoading();
+        new Notice("Render error: " + msg);
+      });
+
     if (immediate) {
       // Two rAFs are required: the first fires before the browser paints,
       // the second fires after. Without the second one the heavy synchronous
       // pagination work in doRender blocks the thread before the browser ever
       // gets a chance to render the spinner/disabled-button state.
-      requestAnimationFrame(() => requestAnimationFrame(() => void this.doRender(token)));
+      requestAnimationFrame(() => requestAnimationFrame(() => void safeDo()));
     } else {
       this.renderDebounceTimer = setTimeout(() => {
         this.renderDebounceTimer = null;
-        requestAnimationFrame(() => requestAnimationFrame(() => void this.doRender(token)));
+        requestAnimationFrame(() => requestAnimationFrame(() => void safeDo()));
       }, 150);
     }
+  }
+
+  // ── Auto page-break insertion ────────────────────────────────────────────────
+
+  /**
+   * Inserts `///` (manual page-break markers) immediately before H1 and/or H2
+   * headings, but ONLY when those headings are genuine Markdown headings — i.e.
+   * `# ` / `## ` at the start of a line that is NOT inside a fenced code block.
+   *
+   * Without this guard the plain regex approach fires on `#` comment lines
+   * inside Python, Shell, Ruby, etc. code blocks that happen to start with `# `.
+   *
+   * Fencing rules (CommonMark §4.5):
+   *   • A fence opens with a line beginning with 3+ back-ticks or 3+ tildes.
+   *   • It closes with a line of the same character and at least the same length,
+   *     with optional trailing whitespace only.
+   *
+   * A break is never inserted before the very first heading in the document
+   * (checked via `out.length > 0`) so the opening heading doesn't acquire a
+   * spurious blank page above it.
+   */
+  private static insertAutoBreaks(
+    md: string,
+    breakH1: boolean,
+    breakH2: boolean,
+  ): string {
+    if (!breakH1 && !breakH2) return md;
+
+    const lines = md.split("\n");
+    const out: string[] = [];
+    let inFence = false;
+    let fenceMarker = "";
+
+    for (const line of lines) {
+      if (!inFence) {
+        const open = line.match(/^(`{3,}|~{3,})/);
+        if (open) {
+          inFence     = true;
+          fenceMarker = open[1];
+        } else if (out.length > 0) {
+          // Only true headings: `^# ` cannot match `## …` because position 1
+          // would be `#` not ` `; likewise `^## ` cannot match `### …`.
+          if      (breakH1 && /^# /.test(line))  out.push("///");
+          else if (breakH2 && /^## /.test(line)) out.push("///");
+        }
+      } else {
+        // A closing fence uses the same character and is at least as long.
+        const close = line.match(/^(`{3,}|~{3,})\s*$/);
+        if (
+          close &&
+          close[1][0] === fenceMarker[0] &&
+          close[1].length >= fenceMarker.length
+        ) {
+          inFence     = false;
+          fenceMarker = "";
+        }
+      }
+      out.push(line);
+    }
+
+    return out.join("\n");
   }
 
   private async doRender(token: number) {
@@ -1153,8 +1248,7 @@ class PDFExportModal extends Modal {
       md = `# ${this.currentFile.basename}\n\n${md}`;
     }
 
-    if (s.autoBreakH1) md = md.replace(/\n(# )/g, "\n///\n$1");
-    if (s.autoBreakH2) md = md.replace(/\n(## )/g, "\n///\n$1");
+    md = PDFExportModal.insertAutoBreaks(md, s.autoBreakH1, s.autoBreakH2);
 
     const sections = splitMarkdownSections(md);
     const dims = PAGE_SIZES[s.pageSize] ?? PAGE_SIZES["A4"];
@@ -1329,11 +1423,25 @@ class PDFExportModal extends Modal {
     };
 
     // Ensure we have a layout — run a full render if the modal was just opened.
+    // We skip requestAnimationFrame here because the export button is already
+    // disabled; we don't need to yield for a paint before starting the work.
     if (!this.layoutCache) {
-      await new Promise<void>((resolve) => {
-        const token = ++this.renderToken;
-        requestAnimationFrame(() => void this.doRender(token).then(resolve));
-      });
+      // Cancel any pending debounced render — this export render supersedes it.
+      if (this.renderDebounceTimer !== null) {
+        clearTimeout(this.renderDebounceTimer);
+        this.renderDebounceTimer = null;
+      }
+      const token = ++this.renderToken;
+      this.showLoading();
+      try {
+        await this.doRender(token);
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        new Notice("Render error: " + msg);
+        this.hideLoading();
+        resetExportBtn();
+        return;
+      }
     }
 
     const cache = this.layoutCache;
@@ -1343,7 +1451,7 @@ class PDFExportModal extends Modal {
       return;
     }
 
-    const { layouts, pw, ph, mTop, mLeft, footerH, headerH, contentW, docCSS, fontFamily, accentColor: exportAccent } = cache;
+    const { layouts, pw, ph, mTop, mLeft, footerH, headerH, contentW, contentH, docCSS, fontFamily, accentColor: exportAccent } = cache;
 
     const pageHTMLParts = layouts.map((layout) => {
       const contentHTML = layout.pageNodes.map((n) => (n as HTMLElement).outerHTML).join("\n");
@@ -1360,7 +1468,7 @@ class PDFExportModal extends Modal {
         ? `<div style="position:absolute;bottom:0;left:0;right:0;height:${footerH}px;display:flex;align-items:center;border-top:0.5px solid ${exportAccent}33;padding:0 ${mLeft}px;font-size:9px;color:#aaa;font-family:${fontFamily};">${footerInnerHTML}</div>`
         : "";
 
-      const contentDivHTML = `<div class="mpdf-doc" style="position:absolute;top:${mTop + headerH}px;left:${mLeft}px;width:${contentW}px;">${contentHTML}</div>`;
+      const contentDivHTML = `<div class="mpdf-doc" style="position:absolute;top:${mTop + headerH}px;left:${mLeft}px;width:${contentW}px;height:${contentH}px;overflow:hidden;">${contentHTML}</div>`;
 
       return `<div class="mpdf-export-page">${headerHTML}${contentDivHTML}${footerHTML}</div>`;
     });
@@ -1414,23 +1522,36 @@ ${pageHTMLParts.join("\n")}
       const win  = new (remote.BrowserWindow)({ show: false, webPreferences: { nodeIntegration: false } });
 
       win.loadURL(url);
+
+      // Guard: both did-fail-load (subresource errors) and did-finish-load can fire
+      // for the same page load. This flag ensures we only act on the first one.
+      let exportHandled = false;
+      const cleanupWin = () => { URL.revokeObjectURL(url); win.close(); resetExportBtn(); };
+
+      // Guard against the page failing to load (OOM, sandbox restrictions, etc.).
+      // Without this, did-finish-load never fires and the UI permanently locks.
+      win.webContents.once("did-fail-load", (_event: unknown, _code: number, desc: string) => {
+        if (exportHandled) return;
+        exportHandled = true;
+        new Notice("PDF load error: " + desc);
+        cleanupWin();
+      });
+
       win.webContents.once("did-finish-load", () => {
+        if (exportHandled) return;
+        exportHandled = true;
         win.webContents
           .printToPDF({ pageSize: s.pageSize, landscape: s.orientation === "landscape", printBackground: true, margins: { marginType: "none" } })
           .then((data: Buffer) => {
-            require("fs").writeFile(res.filePath!, data, (err: Error | null) => {
+            (window as any).require("fs").writeFile(res.filePath!, data, (err: Error | null) => {
               if (err) new Notice("Error saving PDF: " + err.message);
               else     new Notice("✓ PDF saved: " + res.filePath);
-              win.close();
-              URL.revokeObjectURL(url);
-              resetExportBtn();
+              cleanupWin();
             });
           })
           .catch((err: Error) => {
             new Notice("PDF render error: " + err.message);
-            win.close();
-            URL.revokeObjectURL(url);
-            resetExportBtn();
+            cleanupWin();
           });
       });
     } catch {
@@ -1445,12 +1566,52 @@ ${pageHTMLParts.join("\n")}
 class PDFExportSettingTab extends PluginSettingTab {
   plugin: MarkdownPDFPlugin;
 
+  /**
+   * Set to `true` whenever the user changes any setting while this tab is open.
+   * The live preview modal is re-rendered exactly once when the tab closes,
+   * rather than on every individual keystroke or toggle.
+   */
+  private dirty = false;
+
   constructor(app: App, plugin: MarkdownPDFPlugin) {
     super(app, plugin);
     this.plugin = plugin;
   }
 
+  /** Obsidian calls this when the tab becomes visible. */
   display(): void {
+    // Start fresh: if nothing changes before hide(), no render will happen.
+    this.dirty = false;
+    this.buildSettings();
+  }
+
+  /**
+   * Obsidian calls this when the user navigates away from the tab or closes
+   * the settings modal.  If any setting was changed we fire a single render
+   * now, which is far cheaper than rendering on every keystroke.
+   */
+  hide(): void {
+    if (this.dirty) {
+      this.dirty = false;
+      this.plugin.activeModal?.render(true);
+    }
+  }
+
+  /**
+   * Saves the current settings to disk and records that a re-render is
+   * pending.  The actual render is deferred until `hide()` fires.
+   */
+  private async markDirty(): Promise<void> {
+    this.dirty = true;
+    await this.plugin.saveSettings();
+  }
+
+  /**
+   * Builds (or re-builds) the settings UI.  Extracted from `display()` so
+   * that preset / reset handlers can refresh the form without resetting the
+   * dirty flag back to `false`.
+   */
+  private buildSettings(): void {
     const { containerEl } = this;
     containerEl.empty();
     const s = this.plugin.settings;
@@ -1466,8 +1627,10 @@ class PDFExportSettingTab extends PluginSettingTab {
         Object.entries(PRESETS).forEach(([k, v]) => d.addOption(k, v.name));
         d.setValue(s.preset).onChange(async (v) => {
           this.plugin.applyPreset(v);
-          await this.plugin.saveSettingsAndRender();
-          this.display();
+          await this.markDirty();
+          // Refresh the form so all controls show the new preset's values,
+          // but do NOT call display() — that would reset the dirty flag.
+          this.buildSettings();
         });
       })
       .addButton((b) =>
@@ -1475,8 +1638,8 @@ class PDFExportSettingTab extends PluginSettingTab {
          .setTooltip("Reset current preset to its default values")
          .onClick(async () => {
            this.plugin.applyPreset(s.preset);
-           await this.plugin.saveSettingsAndRender();
-           this.display();
+           await this.markDirty();
+           this.buildSettings();
          }),
       );
 
@@ -1486,7 +1649,7 @@ class PDFExportSettingTab extends PluginSettingTab {
       Object.keys(PAGE_SIZES).forEach((k) => d.addOption(k, k));
       d.setValue(s.pageSize).onChange(async (v) => {
         s.pageSize = v;
-        await this.plugin.saveSettingsAndRender();
+        await this.markDirty();
       });
     });
     new Setting(containerEl).setName("Orientation").addDropdown((d) =>
@@ -1494,7 +1657,7 @@ class PDFExportSettingTab extends PluginSettingTab {
        .setValue(s.orientation)
        .onChange(async (v) => {
          s.orientation = v as "portrait" | "landscape";
-         await this.plugin.saveSettingsAndRender();
+         await this.markDirty();
        }),
     );
 
@@ -1504,7 +1667,7 @@ class PDFExportSettingTab extends PluginSettingTab {
       new Setting(containerEl).setName(name).addText((t) =>
         t.setValue(String(s[key])).onChange(async (v) => {
           (s as any)[key] = parseInt(v) || 0;
-          await this.plugin.saveSettingsAndRender();
+          await this.markDirty();
         }),
       );
     marginSetting("Top",    "marginTop");
@@ -1524,32 +1687,37 @@ class PDFExportSettingTab extends PluginSettingTab {
         "'Trebuchet MS', sans-serif":              "Trebuchet",
         "'Courier New', monospace":                "Courier New",
       }).setValue(s.fontFamily)
-       .onChange(async (v) => { s.fontFamily = v; await this.plugin.saveSettingsAndRender(); }),
+       .onChange(async (v) => { s.fontFamily = v; await this.markDirty(); }),
     );
     new Setting(containerEl).setName("Font size (px)").addDropdown((d) => {
       ["10","11","12","13","14","15","16"].forEach((v) => d.addOption(v, v + "px"));
       d.setValue(String(s.fontSize)).onChange(async (v) => {
         s.fontSize = parseInt(v);
-        await this.plugin.saveSettingsAndRender();
+        await this.markDirty();
       });
     });
+    new Setting(containerEl).setName("Code font size").addDropdown((d) =>
+      d.addOptions({ "0.75": "0.75em", "0.80": "0.80em", "0.82": "0.82em", "0.85": "0.85em", "0.88": "0.88em", "0.90": "0.90em", "1.0": "1.00em" })
+       .setValue(String(s.codeFontSize))
+       .onChange(async (v) => { s.codeFontSize = parseFloat(v); await this.markDirty(); }),
+    );
     new Setting(containerEl).setName("Line height").addDropdown((d) =>
       d.addOptions({ "1.4": "Tight (1.4)", "1.6": "Compact (1.6)", "1.75": "Normal (1.75)", "1.85": "Relaxed (1.85)", "2.0": "Double (2.0)" })
        .setValue(String(s.lineHeight))
-       .onChange(async (v) => { s.lineHeight = parseFloat(v); await this.plugin.saveSettingsAndRender(); }),
+       .onChange(async (v) => { s.lineHeight = parseFloat(v); await this.markDirty(); }),
     );
     new Setting(containerEl).setName("Paragraph spacing").addDropdown((d) =>
       d.addOptions({ "0": "None", "0.3": "Tight (0.3em)", "0.5": "Normal (0.5em)", "0.65": "Relaxed (0.65em)", "1.0": "Wide (1em)" })
        .setValue(String(s.paragraphSpacing))
-       .onChange(async (v) => { s.paragraphSpacing = parseFloat(v); await this.plugin.saveSettingsAndRender(); }),
+       .onChange(async (v) => { s.paragraphSpacing = parseFloat(v); await this.markDirty(); }),
     );
     new Setting(containerEl)
       .setName("Heading scale")
       .setDesc("Multiplier applied to all heading sizes.")
       .addDropdown((d) =>
-        d.addOptions({ "0.8": "Small (0.8×)", "0.9": "Compact (0.9×)", "1.0": "Normal (1.0×)", "1.1": "Large (1.1×)", "1.2": "XLarge (1.2×)" })
+        d.addOptions({ "0.8": "Small (0.8×)", "0.88": "0.88×", "0.9": "Compact (0.9×)", "0.95": "0.95×", "1.0": "Normal (1.0×)", "1.05": "1.05×", "1.1": "Large (1.1×)", "1.2": "XLarge (1.2×)" })
          .setValue(String(s.headingScale))
-         .onChange(async (v) => { s.headingScale = parseFloat(v); await this.plugin.saveSettingsAndRender(); }),
+         .onChange(async (v) => { s.headingScale = parseFloat(v); await this.markDirty(); }),
       );
 
     // ── Colors ────────────────────────────────────────────────────────────────
@@ -1558,12 +1726,13 @@ class PDFExportSettingTab extends PluginSettingTab {
       new Setting(containerEl).setName(name).addColorPicker((cp) =>
         cp.setValue(String(s[key])).onChange(async (v) => {
           (s as any)[key] = v;
-          await this.plugin.saveSettingsAndRender();
+          await this.markDirty();
         }),
       );
     colorSetting("Accent color",            "accentColor");
     colorSetting("Body text color",         "bodyColor");
     colorSetting("Heading color",           "headingColor");
+    colorSetting("Blockquote background",   "blockquoteBg");
     colorSetting("Blockquote border",       "blockquoteBorderColor");
     colorSetting("Table header background", "tableHeaderBg");
     colorSetting("Code background",         "codeBackground");
@@ -1571,43 +1740,43 @@ class PDFExportSettingTab extends PluginSettingTab {
     // ── Heading style ─────────────────────────────────────────────────────────
     containerEl.createEl("h3", { text: "Heading Style" });
     new Setting(containerEl).setName("H1 bottom border").addToggle((t) =>
-      t.setValue(s.h1BorderBottom).onChange(async (v) => { s.h1BorderBottom = v; await this.plugin.saveSettingsAndRender(); }),
+      t.setValue(s.h1BorderBottom).onChange(async (v) => { s.h1BorderBottom = v; await this.markDirty(); }),
     );
     new Setting(containerEl).setName("H2 bottom border").addToggle((t) =>
-      t.setValue(s.h2BorderBottom).onChange(async (v) => { s.h2BorderBottom = v; await this.plugin.saveSettingsAndRender(); }),
+      t.setValue(s.h2BorderBottom).onChange(async (v) => { s.h2BorderBottom = v; await this.markDirty(); }),
     );
     new Setting(containerEl).setName("Center H1").addToggle((t) =>
-      t.setValue(s.centerH1).onChange(async (v) => { s.centerH1 = v; await this.plugin.saveSettingsAndRender(); }),
+      t.setValue(s.centerH1).onChange(async (v) => { s.centerH1 = v; await this.markDirty(); }),
     );
 
     // ── Tables ────────────────────────────────────────────────────────────────
     containerEl.createEl("h3", { text: "Tables" });
     new Setting(containerEl).setName("Striped rows").addToggle((t) =>
-      t.setValue(s.tableStriped).onChange(async (v) => { s.tableStriped = v; await this.plugin.saveSettingsAndRender(); }),
+      t.setValue(s.tableStriped).onChange(async (v) => { s.tableStriped = v; await this.markDirty(); }),
     );
 
     // ── Header & Footer ───────────────────────────────────────────────────────
     containerEl.createEl("h3", { text: "Header & Footer" });
     new Setting(containerEl).setName("Show header").addToggle((t) =>
-      t.setValue(s.showHeader).onChange(async (v) => { s.showHeader = v; await this.plugin.saveSettingsAndRender(); }),
+      t.setValue(s.showHeader).onChange(async (v) => { s.showHeader = v; await this.markDirty(); }),
     );
     new Setting(containerEl)
       .setName("Header text")
       .setDesc("Appears top-right on every page.")
-      .addText((t) => t.setValue(s.headerText).onChange(async (v) => { s.headerText = v; await this.plugin.saveSettingsAndRender(); }));
+      .addText((t) => t.setValue(s.headerText).onChange(async (v) => { s.headerText = v; await this.markDirty(); }));
     new Setting(containerEl).setName("Show footer").addToggle((t) =>
-      t.setValue(s.showFooter).onChange(async (v) => { s.showFooter = v; await this.plugin.saveSettingsAndRender(); }),
+      t.setValue(s.showFooter).onChange(async (v) => { s.showFooter = v; await this.markDirty(); }),
     );
     new Setting(containerEl)
       .setName("Footer text")
-      .addText((t) => t.setValue(s.footerText).onChange(async (v) => { s.footerText = v; await this.plugin.saveSettingsAndRender(); }));
+      .addText((t) => t.setValue(s.footerText).onChange(async (v) => { s.footerText = v; await this.markDirty(); }));
     new Setting(containerEl).setName("Show page numbers").addToggle((t) =>
-      t.setValue(s.showPageNumbers).onChange(async (v) => { s.showPageNumbers = v; await this.plugin.saveSettingsAndRender(); }),
+      t.setValue(s.showPageNumbers).onChange(async (v) => { s.showPageNumbers = v; await this.markDirty(); }),
     );
     new Setting(containerEl).setName("Page number position").addDropdown((d) =>
       d.addOptions({ left: "Left", center: "Center", right: "Right" })
        .setValue(s.pageNumberPosition)
-       .onChange(async (v) => { s.pageNumberPosition = v as "left"|"center"|"right"; await this.plugin.saveSettingsAndRender(); }),
+       .onChange(async (v) => { s.pageNumberPosition = v as "left"|"center"|"right"; await this.markDirty(); }),
     );
 
     // ── Behaviour ─────────────────────────────────────────────────────────────
@@ -1621,14 +1790,14 @@ class PDFExportSettingTab extends PluginSettingTab {
       .addToggle((t) =>
         t.setValue(s.includeFilenameAsTitle).onChange(async (v) => {
           s.includeFilenameAsTitle = v;
-          await this.plugin.saveSettingsAndRender();
+          await this.markDirty();
         }),
       );
     new Setting(containerEl).setName("Auto page break before H1").addToggle((t) =>
-      t.setValue(s.autoBreakH1).onChange(async (v) => { s.autoBreakH1 = v; await this.plugin.saveSettingsAndRender(); }),
+      t.setValue(s.autoBreakH1).onChange(async (v) => { s.autoBreakH1 = v; await this.markDirty(); }),
     );
     new Setting(containerEl).setName("Auto page break before H2").addToggle((t) =>
-      t.setValue(s.autoBreakH2).onChange(async (v) => { s.autoBreakH2 = v; await this.plugin.saveSettingsAndRender(); }),
+      t.setValue(s.autoBreakH2).onChange(async (v) => { s.autoBreakH2 = v; await this.markDirty(); }),
     );
   }
 }
