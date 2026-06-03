@@ -39,12 +39,10 @@ Type `///` on its own line, or click the **Insert Page Break** button in the too
 ![Modern preset](screenshots/style3.png)
 
 ### Settings Panel
-![Page & Preset settings](screenshots/settings1.png)
 
-![Typography & Colors settings](screenshots/settings2.png)
+<img src="screenshots/settings1.png" width="85%" /><img src="screenshots/settings2.png" width="85%" />
 
-![Heading Style, Tables & Header/Footer settings](screenshots/settings3.png)
-
+<img src="screenshots/settings3.png" width="85%" /><img src="screenshots/settings4.png" width="85%" />
 
 ## Installation
 
