@@ -1,11 +1,9 @@
 import {
-  App, Component, ItemView, MarkdownRenderer, MarkdownView, Notice,
-  Plugin, PluginSettingTab, Setting, TFile, WorkspaceLeaf, setIcon,
+  App, Component, MarkdownRenderer, MarkdownView, Menu, Modal, Notice,
+  Plugin, PluginSettingTab, Setting, TFile, setIcon,
 } from "obsidian";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
-
-const VIEW_TYPE = "advanced-pdf-export";
 
 const PAGE_SIZES: Record<string, { w: number; h: number }> = {
   A4:     { w: 794,  h: 1123 },
@@ -58,15 +56,15 @@ interface PDFExportSettings extends DocStyle {
   previewScale: number;
 }
 
-// Typed cache for the last render — avoids JSON round-trips.
+// Typed layout cache — avoids re-paginating on zoom-only changes.
+// fontFamily and accentColor are cached so zoom redraws stay consistent
+// with the paginated body even if settings are changed in the interim.
 interface LayoutCache {
   layouts: PageLayout[];
   pw: number;
   ph: number;
   mTop: number;
-  mBottom: number;
   mLeft: number;
-  mRight: number;
   footerH: number;
   headerH: number;
   contentW: number;
@@ -112,7 +110,7 @@ const PRESETS: Record<string, DocStyle> = {
   },
   minimal: {
     name: "Minimal",
-    fontFamily: "'Helvetica Neue', Arial, sans-serif",
+    fontFamily: "'Helvetica Neue', Helvetica, sans-serif",
     fontSize: 12,
     lineHeight: 1.6,
     paragraphSpacing: 0.45,
@@ -175,7 +173,7 @@ const PRESETS: Record<string, DocStyle> = {
   },
   modern: {
     name: "Modern",
-    fontFamily: "Arial, 'Helvetica Neue', sans-serif",
+    fontFamily: "Arial, sans-serif",
     fontSize: 13,
     lineHeight: 1.75,
     paragraphSpacing: 0.6,
@@ -252,7 +250,10 @@ function escapeHTML(s: string): string {
 function normalizeMarkdown(raw: string): string {
   return raw
     .replace(/\r\n/g, "\n")
-    .replace(/^>\s*\[\![^\]]+\].*(?:\n|$)/gmi, "");
+    // Strip entire Obsidian callout blocks: the `[!TYPE]` header line and all
+    // subsequent `>` body lines. Without the body group only the header was
+    // removed, leaving body lines to render as orphaned blockquotes.
+    .replace(/^>\s*\[\![^\]]+\].*(?:\n|$)(?:>.*(?:\n|$))*/gm, "");
 }
 
 function splitMarkdownSections(md: string): string[] {
@@ -292,22 +293,22 @@ function slugifyHeading(text: string): string {
 }
 
 /**
- * Single post-processing pass over Obsidian's rendered HTML that:
+ * Post-processing passes over Obsidian's rendered HTML:
  *
  * 1. Assigns `id` attributes to all h1–h6 so `#fragment` links have targets.
  * 2. Strips the `external-link` class from <a> elements so Obsidian's theme
  *    CSS never gets a chance to inject the ↗ icon (works even when the theme
  *    rule has higher specificity than our own `.mpdf-doc` scoped rule).
- * 3. Sets a `title` attribute on every internal `<a href="#…">` to the text
- *    of the heading it points to, so both the preview tooltip and the PDF
- *    viewer tooltip show "Overview" instead of a generic "go to page N".
+ * 3. Removes copy-code buttons that Obsidian injects into every fenced code
+ *    block — they are interactive UI widgets that have no place in a PDF or
+ *    a read-only print preview.
  */
 function postProcessRenderedHTML(root: HTMLElement): void {
   // ── Pass 1: assign heading IDs ────────────────────────────────────────────
   const seen = new Map<string, number>();
 
   root.querySelectorAll("h1,h2,h3,h4,h5,h6").forEach((el) => {
-    const text = (el as HTMLElement).innerText || el.textContent || "";
+    const text = el.textContent || "";
     const base = slugifyHeading(text);
     if (!base) return;
     const count = seen.get(base) ?? 0;
@@ -316,12 +317,18 @@ function postProcessRenderedHTML(root: HTMLElement): void {
     el.id = id;
   });
 
-  // ── Pass 2: fix all anchor elements ────────────────────────────────────────
+  // ── Pass 2: fix all anchor elements ──────────────────────────────────────
   root.querySelectorAll<HTMLAnchorElement>("a").forEach((a) => {
     // Remove the Obsidian-added class that triggers the external link icon.
     // This is the only reliable way to beat the theme's unscoped CSS rule.
     a.classList.remove("external-link");
   });
+
+  // ── Pass 3: strip copy-code buttons ──────────────────────────────────────
+  // Obsidian injects a .copy-code-button into every rendered <pre> block.
+  // Removing the nodes here ensures they never reach the paginator, the
+  // preview DOM, or the exported PDF HTML — regardless of CSS.
+  root.querySelectorAll(".copy-code-button").forEach((el) => el.remove());
 }
 
 // ─── CSS generator ────────────────────────────────────────────────────────────
@@ -329,13 +336,32 @@ function postProcessRenderedHTML(root: HTMLElement): void {
 // Single source of truth used by both the live preview and the exported PDF.
 // The selector is always `.mpdf-doc` so both pipelines get identical styles.
 
+/**
+ * Returns the relative luminance (0–1) of a CSS hex color (#rrggbb or #rgb).
+ * Used to pick readable table-header text regardless of which preset or custom
+ * color is active.  Non-hex values (e.g. named colors) return 1 (treat as
+ * light) so we fall back to the heading color rather than forcing white.
+ */
+function hexLuminance(hex: string): number {
+  const full = hex.replace(
+    /^#([\da-f])([\da-f])([\da-f])$/i,
+    (_, r, g, b) => `#${r}${r}${g}${g}${b}${b}`,
+  );
+  if (!/^#[\da-f]{6}$/i.test(full)) return 1;
+  const linearize = (c: number) =>
+    c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  const r = linearize(parseInt(full.slice(1, 3), 16) / 255);
+  const g = linearize(parseInt(full.slice(3, 5), 16) / 255);
+  const b = linearize(parseInt(full.slice(5, 7), 16) / 255);
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
 function buildDocCSS(s: PDFExportSettings): string {
   const hs = s.headingScale;
-  // Presets with dark table headers need white text; others use heading colour.
+  // Choose white or heading-colour text based on the actual background
+  // luminance, so customised colours work correctly regardless of preset name.
   const tableHeaderTextColor =
-    s.preset === "modern" || s.preset === "newspaper" || s.preset === "colorful"
-      ? "#fff"
-      : s.headingColor;
+    hexLuminance(s.tableHeaderBg) < 0.35 ? "#fff" : s.headingColor;
 
   return `
   .mpdf-doc {
@@ -419,6 +445,10 @@ function buildDocCSS(s: PDFExportSettings): string {
   .mpdf-doc img { max-width: 100%; height: auto; display: block; margin: ${s.paragraphSpacing}em auto; }
   .mpdf-doc a { color: ${s.accentColor}; }
   .mpdf-doc a.external-link::after { display: none !important; content: none !important; }
+  /* Belt-and-suspenders: hide any copy-code button Obsidian re-injects after
+     the DOM-removal pass in postProcessRenderedHTML (e.g. via a MutationObserver
+     or a theme that adds its own variant with different timing). */
+  .mpdf-doc .copy-code-button { display: none !important; }
   .mpdf-doc table { width: 100%; border-collapse: collapse; margin: 0 0 ${s.paragraphSpacing}em; font-size: 0.92em; }
   .mpdf-doc th {
     background: ${s.tableHeaderBg};
@@ -770,55 +800,58 @@ function paginateHTML(
   document.body.appendChild(sandbox);
 
   const pages: HTMLElement[][] = [];
-  let currentPage: HTMLElement[] = [];
-  const children = Array.from(inner.children) as HTMLElement[];
-  let idx = 0;
+  try {
+    let currentPage: HTMLElement[] = [];
+    const children = Array.from(inner.children) as HTMLElement[];
+    let idx = 0;
 
-  while (idx < children.length) {
-    const child = children[idx];
-    const fits = makeFitFn(currentPage, measure, contentHeightPx);
+    while (idx < children.length) {
+      const child = children[idx];
+      const fits = makeFitFn(currentPage, measure, contentHeightPx);
 
-    if (fits(child.cloneNode(true) as HTMLElement)) {
-      currentPage.push(child.cloneNode(true) as HTMLElement);
-      idx++;
-      continue;
-    }
-
-    // Element doesn't fit on the current page. Try splitting it.
-    const forceSplit = currentPage.length === 0;
-    const split = splitElement(child, fits, forceSplit);
-    if (split) {
-      currentPage.push(split[0]);
-      pages.push(currentPage);
-      currentPage = [];
-      // Replace current child with the remainder for re-processing.
-      const remainder = split[1];
-      if (remainder.textContent?.trim() || remainder.children.length > 0) {
-        children[idx] = remainder;
-      } else {
+      if (fits(child.cloneNode(true) as HTMLElement)) {
+        currentPage.push(child.cloneNode(true) as HTMLElement);
         idx++;
+        continue;
       }
-      continue;
-    }
 
-    // Can't split. If there's content on this page, flush it and retry the
-    // same element on a fresh full-height page.
-    if (currentPage.length > 0) {
+      // Element doesn't fit on the current page. Try splitting it.
+      const forceSplit = currentPage.length === 0;
+      const split = splitElement(child, fits, forceSplit);
+      if (split) {
+        currentPage.push(split[0]);
+        pages.push(currentPage);
+        currentPage = [];
+        // Replace current child with the remainder for re-processing.
+        const remainder = split[1];
+        if (remainder.textContent?.trim() || remainder.children.length > 0) {
+          children[idx] = remainder;
+        } else {
+          idx++;
+        }
+        continue;
+      }
+
+      // Can't split. If there's content on this page, flush it and retry the
+      // same element on a fresh full-height page.
+      if (currentPage.length > 0) {
+        pages.push(currentPage);
+        currentPage = [];
+        continue;
+      }
+
+      // Element is alone on an empty page and truly unsplittable (e.g. a giant
+      // image). Force it onto its own page and advance so we never stall.
+      currentPage.push(child.cloneNode(true) as HTMLElement);
       pages.push(currentPage);
       currentPage = [];
-      continue;
+      idx++;
     }
 
-    // Element is alone on an empty page and truly unsplittable (e.g. a giant
-    // image). Force it onto its own page and advance so we never stall.
-    currentPage.push(child.cloneNode(true) as HTMLElement);
-    pages.push(currentPage);
-    currentPage = [];
-    idx++;
+    if (currentPage.length > 0) pages.push(currentPage);
+  } finally {
+    document.body.removeChild(sandbox);
   }
-
-  if (currentPage.length > 0) pages.push(currentPage);
-  document.body.removeChild(sandbox);
   return pages.length > 0 ? pages : [[]];
 }
 
@@ -856,34 +889,35 @@ function buildPageLayouts(allPages: HTMLElement[][], s: PDFExportSettings): Page
 
 export default class MarkdownPDFPlugin extends Plugin {
   settings: PDFExportSettings;
+  activeModal: PDFExportModal | null = null;
 
   async onload() {
     await this.loadSettings();
-    this.registerView(VIEW_TYPE, (leaf) => new PDFExportView(leaf, this));
-    this.addRibbonIcon("file-output", "Advanced PDF Export", () => this.activateView());
     this.addCommand({
       id: "open-advanced-pdf-export",
-      name: "Open Advanced PDF Export panel",
-      callback: () => this.activateView(),
+      name: "Open Panel",
+      callback: () => this.openModal(),
     });
+    this.registerEvent(
+      this.app.workspace.on("file-menu", (menu: Menu, file) => {
+        if (!(file instanceof TFile) || file.extension !== "md") return;
+        menu.addItem((item) =>
+          item.setTitle("Advanced PDF Export: Open Panel").setIcon("file-output")
+              .onClick(() => this.openModal(file)),
+        );
+      }),
+    );
     this.addSettingTab(new PDFExportSettingTab(this.app, this));
   }
 
   onunload() {
-    this.app.workspace.detachLeavesOfType(VIEW_TYPE);
+    this.activeModal?.close();
   }
 
-  async activateView() {
-    const { workspace } = this.app;
-    let leaf = workspace.getLeavesOfType(VIEW_TYPE)[0];
-    if (!leaf) {
-      const right = workspace.getRightLeaf(false);
-      if (right) {
-        await right.setViewState({ type: VIEW_TYPE, active: true });
-        leaf = right;
-      }
-    }
-    if (leaf) workspace.revealLeaf(leaf);
+  /** Open the modal, optionally pre-loading a specific file. */
+  openModal(file?: TFile) {
+    if (this.activeModal) this.activeModal.close();
+    new PDFExportModal(this.app, this, file).open();
   }
 
   async loadSettings() {
@@ -896,9 +930,7 @@ export default class MarkdownPDFPlugin extends Plugin {
 
   async saveSettingsAndRender() {
     await this.saveSettings();
-    for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) {
-      if (leaf.view instanceof PDFExportView) leaf.view.render();
-    }
+    this.activeModal?.render();
   }
 
   applyPreset(key: string) {
@@ -909,65 +941,105 @@ export default class MarkdownPDFPlugin extends Plugin {
   }
 }
 
-// ─── View ─────────────────────────────────────────────────────────────────────
+// ─── File resolver ────────────────────────────────────────────────────────────
 
-class PDFExportView extends ItemView {
+/**
+ * Find the best markdown file to load when the modal opens.
+ *
+ * Four-level cascade so every real-world scenario is covered:
+ *
+ *  1. `initialFile`         — passed explicitly (right-click menu, command
+ *                             with a specific file). Always wins.
+ *  2. `getActiveViewOfType` — a MarkdownView is the currently focused leaf.
+ *                             The common case when a note tab is open and active.
+ *  3. `getActiveFile`       — "returns the most recently active file" per the
+ *                             Obsidian API docs. Covers the case where the file
+ *                             explorer sidebar retains focus after the user
+ *                             clicks a file to open it.
+ *  4. `getMostRecentLeaf`   — searches rootSplit (the main editor area),
+ *                             explicitly ignoring sidebar leaves. The Obsidian
+ *                             docs describe it as "useful for interacting with
+ *                             the leaf in the root split while a sidebar leaf
+ *                             might be active." Covers fresh Obsidian startup
+ *                             before any click, and is file-manager-agnostic so
+ *                             it works with any third-party file manager plugin.
+ */
+function resolveActiveMarkdownFile(app: App, initialFile?: TFile | null): TFile | null {
+  if (initialFile) return initialFile;
+
+  const fromView = app.workspace.getActiveViewOfType(MarkdownView)?.file;
+  if (fromView) return fromView;
+
+  const activeFile = app.workspace.getActiveFile();
+  if (activeFile?.extension === "md") return activeFile;
+
+  const leaf = app.workspace.getMostRecentLeaf();
+  if (leaf?.view instanceof MarkdownView) return (leaf.view as MarkdownView).file ?? null;
+
+  return null;
+}
+
+// ─── Modal ────────────────────────────────────────────────────────────────────
+
+class PDFExportModal extends Modal {
   plugin: MarkdownPDFPlugin;
   private editorEl: HTMLTextAreaElement;
   private previewEl: HTMLElement;
   private pageCountEl: HTMLElement;
-  private wordCountEl: HTMLElement;
-  private sourceLabel: HTMLElement;
+  private noteTitleEl: HTMLElement;
+  private renderBtn!: HTMLButtonElement;
+  private exportBtn!: HTMLButtonElement;
+  private loadingOverlayEl!: HTMLElement;
 
+  // Owned Component for MarkdownRenderer — loaded on open, unloaded on close.
+  private renderComponent = new Component();
+
+  private readonly initialFile: TFile | null;
   private currentFile: TFile | null = null;
   private renderToken = 0;
   private layoutCache: LayoutCache | null = null;
-  private pendingStatePath: string | null = null;
+  // Debounce handle for settings-driven re-renders; cleared on close.
+  private renderDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 
-  constructor(leaf: WorkspaceLeaf, plugin: MarkdownPDFPlugin) {
-    super(leaf);
+  constructor(app: App, plugin: MarkdownPDFPlugin, file?: TFile) {
+    super(app);
     this.plugin = plugin;
-  }
-
-  getViewType()    { return VIEW_TYPE; }
-  getDisplayText() { return "Advanced PDF Export"; }
-  getIcon()        { return "file-output"; }
-
-  // Obsidian persists the return value of getState() in its workspace file and
-  // passes it back via setState() when the panel is reopened. We store the
-  // active file path so the panel rehydrates automatically after a restart.
-  getState(): Record<string, unknown> {
-    return { filePath: this.currentFile?.path ?? null };
-  }
-
-  async setState(state: Record<string, unknown>, result: { history: boolean }): Promise<void> {
-    if (typeof state?.filePath === "string") this.pendingStatePath = state.filePath;
-    return super.setState(state, result);
+    this.initialFile = file ?? null;
   }
 
   async onOpen() {
-    const container = this.containerEl.children[1] as HTMLElement;
-    container.empty();
-    container.style.cssText = "display:flex;flex-direction:column;height:100%;padding:0;overflow:hidden;";
-    this.buildUI(container);
+    this.plugin.activeModal = this;
+    this.renderComponent.load();
+    this.modalEl.addClass("mpdf-modal");
+    this.contentEl.style.cssText = "display:flex;flex-direction:column;height:100%;padding:0;overflow:hidden;";
+    this.buildUI(this.contentEl);
 
-    // Load order on open:
-    //   1. Active markdown note (instant, covers normal panel open).
-    //   2. Saved path from workspace state (covers Obsidian restart where the
-    //      markdown leaf isn't active yet when our view initialises).
-    //   3. Wait one frame and retry both (layout restore may still be in flight).
-    //   4. Wait 400 ms and retry (slow vault / cold start safety net).
-    if (!await this.loadCurrentNote()) await this.tryRestoreFromState();
+    const file = resolveActiveMarkdownFile(this.app, this.initialFile);
 
-    this.registerEvent(
-      this.app.workspace.on("active-leaf-change", () => this.loadCurrentNote()),
-    );
+    if (file) {
+      this.currentFile = file;
+      const content = await this.app.vault.read(file);
+      this.editorEl.value = content;
+      this.noteTitleEl.textContent = file.basename;
+      this.noteTitleEl.title = file.path;
+      // Show the loading overlay right away so the panel feels instantly open,
+      // then yield two animation frames so the browser can paint the modal and
+      // textarea content before the heavy pagination work starts.
+      this.showLoading();
+      await new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())));
+      this.render(true);
+    }
   }
 
-  async onClose() {
-    this.currentFile      = null;
-    this.layoutCache      = null;
-    this.pendingStatePath = null;
+  onClose() {
+    if (this.renderDebounceTimer !== null) {
+      clearTimeout(this.renderDebounceTimer);
+      this.renderDebounceTimer = null;
+    }
+    this.renderComponent.unload();
+    this.plugin.activeModal = null;
+    this.currentFile        = null;
+    this.layoutCache        = null;
   }
 
   // ── UI ──────────────────────────────────────────────────────────────────────
@@ -980,73 +1052,48 @@ class PDFExportView extends ItemView {
 
     const editorPanel = main.createEl("div", { cls: "mpdf-editor-panel" });
 
-    // ── Source file bar ───────────────────────────────────────────────────────
-    // ── Source file bar ───────────────────────────────────────────────────────
-    const sourceBar = editorPanel.createEl("div", {
-      cls: "mpdf-source-bar",
-    });
-
-    const copyBtn = sourceBar.createEl("button", {
-      cls: "mpdf-btn mpdf-btn-replace",
-      text: "copy from note", // clearer UX than "Replace"
-    });
-
-    copyBtn.title = "Replace editor contents with the current note";
-    copyBtn.addEventListener("click", () => this.copyNoteToEditor());
-
-    const clearBtn = sourceBar.createEl("button", {
-      cls: "mpdf-btn mpdf-btn-clear",
-      text: "clear",
-    });
-    clearBtn.title = "Clear the editor";
-    clearBtn.addEventListener("click", () => {
-      this.editorEl.value = "";
-      this.wordCountEl.textContent = "0 words";
-      this.sourceLabel.textContent = "Click on a note and click copy to load it";
-    });
-
-    this.sourceLabel = sourceBar.createEl("span", {
-      cls: "mpdf-source-label",
-      text: "Click on a note and click copy to load it",
-    });
-
     this.editorEl = editorPanel.createEl("textarea", { cls: "mpdf-editor" });
     this.editorEl.placeholder =
-      "Click on a note then click \"copy from note\" to load the active note into this editor.\n\n" +
-      "You can then edit freely — changes here won't affect the original note.\n\n" +
+      "Type or paste markdown here to preview and export as PDF.\n\n" +
+      "Tip: open this panel from a note's right-click menu, command palette,\n" +
+      "or keyboard shortcut to auto-load the active note.\n\n" +
       "Use /// on its own line for a manual page break.\n" +
       "Use --- for a horizontal rule.\n\n" +
       "Markdown tables:\n| Col A | Col B |\n|-------|-------|\n| Cell  | Cell  |";
 
-    const foot = editorPanel.createEl("div", { cls: "mpdf-editor-footer" });
-    this.wordCountEl = foot.createEl("span", { text: "0 words" });
-    foot.createEl("span", { text: "/// = page break · --- = rule" });
+    // Wrap the preview in a container so the loading overlay (absolutely
+    // positioned) stays fixed over the viewport portion instead of scrolling
+    // along with the page thumbnails.
+    const previewContainer = main.createEl("div", { cls: "mpdf-preview-container" });
+    this.previewEl = previewContainer.createEl("div", { cls: "mpdf-preview" });
 
-    this.previewEl = main.createEl("div", { cls: "mpdf-preview" });
-
-    // Update word count live as the user types — no render triggered.
-    this.editorEl.addEventListener("input", () => {
-      const words = this.editorEl.value.trim().split(/\s+/).filter(Boolean).length;
-      this.wordCountEl.textContent = `${words} words`;
-    });
+    // Loading overlay — hidden by default, shown while rendering.
+    this.loadingOverlayEl = previewContainer.createEl("div", { cls: "mpdf-loading-overlay" });
+    this.loadingOverlayEl.style.display = "none";
+    this.loadingOverlayEl.createEl("div", { cls: "mpdf-spinner" });
+    this.loadingOverlayEl.createEl("span", { cls: "mpdf-loading-text", text: "Rendering…" });
 
     // Keyboard shortcut: Ctrl+Enter / Cmd+Enter to trigger a manual refresh.
     this.editorEl.addEventListener("keydown", (e) => {
       if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
         e.preventDefault();
-        this.render();
+        this.render(true);
       }
     });
   }
 
   private buildTopbar(topbar: HTMLElement, s: PDFExportSettings) {
+    const left  = topbar.createEl("div", { cls: "mpdf-topbar-left" });
+    this.noteTitleEl = topbar.createEl("div", { cls: "mpdf-topbar-title", text: "—" });
+    const right = topbar.createEl("div", { cls: "mpdf-topbar-right" });
+
     const makeSelect = (
       label: string,
       opts: Record<string, string>,
       val: string,
       cb: (v: string) => Promise<void>,
     ) => {
-      const wrap = topbar.createEl("div", { cls: "mpdf-ctrl" });
+      const wrap = left.createEl("div", { cls: "mpdf-ctrl" });
       wrap.createEl("span", { cls: "mpdf-ctrl-label", text: label });
       const el = wrap.createEl("select", { cls: "mpdf-select" });
       for (const [v, t] of Object.entries(opts)) {
@@ -1077,7 +1124,7 @@ class PDFExportView extends ItemView {
       },
     );
 
-    const zoomWrap = topbar.createEl("div", { cls: "mpdf-ctrl" });
+    const zoomWrap = left.createEl("div", { cls: "mpdf-ctrl" });
     zoomWrap.createEl("span", { cls: "mpdf-ctrl-label", text: "Zoom" });
     const zoomLabel = zoomWrap.createEl("span", {
       cls: "mpdf-ctrl-label",
@@ -1098,15 +1145,13 @@ class PDFExportView extends ItemView {
       this.renderPreviewOnly();
     });
 
-    const breakBtn = topbar.createEl("button", { cls: "mpdf-btn", text: "Break" });
+    const breakBtn = left.createEl("button", { cls: "mpdf-btn", text: "Insert Page Break" });
     breakBtn.title = "Insert page break (///)";
     breakBtn.addEventListener("click", () => this.insertAtCursor("\n///\n"));
 
-    topbar.createEl("div").style.flex = "1"; // spacer
+    this.pageCountEl = right.createEl("span", { cls: "mpdf-page-count", text: "— pages" });
 
-    this.pageCountEl = topbar.createEl("span", { cls: "mpdf-page-count", text: "— pages" });
-
-    const settingsBtn = topbar.createEl("button", { cls: "mpdf-btn mpdf-btn-icon" });
+    const settingsBtn = right.createEl("button", { cls: "mpdf-btn mpdf-btn-icon" });
     settingsBtn.setAttr("aria-label", "Open Advanced PDF Export settings");
     setIcon(settingsBtn, "settings");
     settingsBtn.addEventListener("click", () => {
@@ -1115,88 +1160,134 @@ class PDFExportView extends ItemView {
       settings?.openTabById?.("advanced-pdf-export");
     });
 
-    const renderBtn = topbar.createEl("button", { cls: "mpdf-btn", text: "⟳ Render PDF" });
-    renderBtn.title = "Render preview from current note (Ctrl+Enter)";
-    renderBtn.addEventListener("click", () => this.render());
+    this.renderBtn = right.createEl("button", { cls: "mpdf-btn", text: "⟳ Render PDF" });
+    this.renderBtn.title = "Render preview (Ctrl+Enter)";
+    this.renderBtn.addEventListener("click", () => this.render(true));
 
-    const exportBtn = topbar.createEl("button", { cls: "mpdf-btn mpdf-btn-primary", text: "⬇ Export PDF" });
-    exportBtn.addEventListener("click", () => void this.exportPDF());
+    this.exportBtn = right.createEl("button", { cls: "mpdf-btn mpdf-btn-primary", text: "⬇ Export PDF" });
+    this.exportBtn.addEventListener("click", () => void this.exportPDF());
   }
-
-  // ── Note loading ────────────────────────────────────────────────────────────
-
-  private async loadCurrentNote(): Promise<boolean> {
-    const mv = this.app.workspace.getActiveViewOfType(MarkdownView);
-    if (!mv?.file) return false;
-    if (mv.file === this.currentFile) return true;
-    this.currentFile = mv.file;
-    this.sourceLabel.textContent = mv.file.basename;
-    this.sourceLabel.title = mv.file.path;
-    return true;
-  }
-
-  private async tryRestoreFromState(): Promise<void> {
-    // Attempt 1: use saved path immediately.
-    if (this.pendingStatePath) {
-      const loaded = await this.loadFileByPath(this.pendingStatePath);
-      this.pendingStatePath = null;
-      if (loaded) return;
-    }
-    // Attempt 2: wait one frame for workspace layout restore to settle.
-    await new Promise<void>((res) => requestAnimationFrame(() => res()));
-    if (await this.loadCurrentNote()) return;
-    if (this.pendingStatePath) {
-      const loaded = await this.loadFileByPath(this.pendingStatePath);
-      this.pendingStatePath = null;
-      if (loaded) return;
-    }
-    // Attempt 3: 400 ms safety net for slow cold starts.
-    await new Promise<void>((res) => setTimeout(res, 400));
-    if (!await this.loadCurrentNote() && this.pendingStatePath) {
-      await this.loadFileByPath(this.pendingStatePath);
-      this.pendingStatePath = null;
-    }
-  }
-
-  private async loadFileByPath(path: string): Promise<boolean> {
-    const file = this.app.vault.getAbstractFileByPath(path);
-    if (!(file instanceof TFile)) return false;
-    this.currentFile = file;
-    this.sourceLabel.textContent = file.basename;
-    this.sourceLabel.title = file.path;
-    return true;
-  }
-
-  // Reads the current vault file and copies it into the edit textarea.
-  // This is the only way content gets into the editor — the user explicitly
-  // triggers it, so their prior edits are never silently overwritten.
-  private async copyNoteToEditor(): Promise<void> {
-    if (!this.currentFile) {
-      new Notice("No note is open. Open a markdown note first.");
-      return;
-    }
-    const content = await this.app.vault.read(this.currentFile);
-    this.editorEl.value = content;
-    const words = content.trim().split(/\s+/).filter(Boolean).length;
-    this.wordCountEl.textContent = `${words} words`;
-    this.editorEl.focus();
-  }
-
 
   private insertAtCursor(text: string) {
     const ta    = this.editorEl;
     const start = ta.selectionStart;
-    ta.value = ta.value.slice(0, start) + text + ta.value.slice(start);
+    const end   = ta.selectionEnd;
+    ta.value = ta.value.slice(0, start) + text + ta.value.slice(end);
     ta.selectionStart = ta.selectionEnd = start + text.length;
     ta.focus();
-    // No auto-render — user clicks Refresh when ready.
   }
 
   // ── Render ──────────────────────────────────────────────────────────────────
 
-  render() {
+  /**
+   * Schedule a render.
+   *
+   * @param immediate  When true (button click, Ctrl+Enter, initial open) the
+   *                   render starts on the very next animation frame.
+   *                   When false (settings changes) a 150 ms debounce is
+   *                   applied so rapid successive changes collapse into one
+   *                   render instead of hammering the paginator.
+   *
+   * Either way the loading overlay is shown right away so the UI never looks
+   * frozen — the user always gets visual feedback that work is in progress.
+   */
+  render(immediate = false) {
     const token = ++this.renderToken;
-    requestAnimationFrame(() => void this.doRender(token));
+    // Cancel any pending debounced render — this one supersedes it.
+    if (this.renderDebounceTimer !== null) {
+      clearTimeout(this.renderDebounceTimer);
+      this.renderDebounceTimer = null;
+    }
+    // Show the loading state before any async gap so the UI responds instantly.
+    this.showLoading();
+
+    // Shared error handler: if doRender throws (e.g. MarkdownRenderer fails),
+    // restore the UI rather than leaving the loading overlay up forever.
+    const safeDo = () =>
+      this.doRender(token).catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error("[advanced-pdf-export] render error:", err);
+        this.hideLoading();
+        new Notice("Render error: " + msg);
+      });
+
+    if (immediate) {
+      // Two rAFs are required: the first fires before the browser paints,
+      // the second fires after. Without the second one the heavy synchronous
+      // pagination work in doRender blocks the thread before the browser ever
+      // gets a chance to render the spinner/disabled-button state.
+      requestAnimationFrame(() => requestAnimationFrame(() => void safeDo()));
+    } else {
+      this.renderDebounceTimer = setTimeout(() => {
+        this.renderDebounceTimer = null;
+        requestAnimationFrame(() => requestAnimationFrame(() => void safeDo()));
+      }, 150);
+    }
+  }
+
+  // ── Auto page-break insertion ────────────────────────────────────────────────
+
+  /**
+   * Inserts `///` (manual page-break markers) immediately before H1 and/or H2
+   * headings, but ONLY when those headings are genuine Markdown headings — i.e.
+   * `# ` / `## ` at the start of a line that is NOT inside a fenced code block.
+   *
+   * Without this guard the plain regex approach fires on `#` comment lines
+   * inside Python, Shell, Ruby, etc. code blocks that happen to start with `# `.
+   *
+   * Heading detection uses `^# ` / `^## ` anchored at the start of the line,
+   * so indented headings (`    # comment`), tab-indented lines, and tags with
+   * no trailing space (`#tag`) are all correctly ignored without extra logic.
+   *
+   * Fencing rules (CommonMark §4.5):
+   *   • A fence opens with a line beginning with 3+ back-ticks or 3+ tildes.
+   *   • It closes with a line of the same character and at least the same length,
+   *     with optional trailing whitespace only.
+   *
+   * A break is never inserted before the very first heading in the document
+   * (checked via `out.length > 0`) so the opening heading doesn't acquire a
+   * spurious blank page above it.
+   */
+  private static insertAutoBreaks(
+    md: string,
+    breakH1: boolean,
+    breakH2: boolean,
+  ): string {
+    if (!breakH1 && !breakH2) return md;
+
+    const lines = md.split("\n");
+    const out: string[] = [];
+    let inFence = false;
+    let fenceMarker = "";
+
+    for (const line of lines) {
+      if (!inFence) {
+        const open = line.match(/^(`{3,}|~{3,})/);
+        if (open) {
+          inFence     = true;
+          fenceMarker = open[1];
+        } else if (out.length > 0) {
+          // Only true headings: `^# ` cannot match `## …` because position 1
+          // would be `#` not ` `; likewise `^## ` cannot match `### …`.
+          if      (breakH1 && /^# /.test(line))  out.push("///");
+          else if (breakH2 && /^## /.test(line)) out.push("///");
+        }
+      } else {
+        // A closing fence uses the same character and is at least as long.
+        const close = line.match(/^(`{3,}|~{3,})\s*$/);
+        if (
+          close &&
+          close[1][0] === fenceMarker[0] &&
+          close[1].length >= fenceMarker.length
+        ) {
+          inFence     = false;
+          fenceMarker = "";
+        }
+      }
+      out.push(line);
+    }
+
+    return out.join("\n");
   }
 
   private async doRender(token: number) {
@@ -1211,8 +1302,7 @@ class PDFExportView extends ItemView {
       md = `# ${this.currentFile.basename}\n\n${md}`;
     }
 
-    if (s.autoBreakH1) md = md.replace(/\n(# )/g, "\n///\n$1");
-    if (s.autoBreakH2) md = md.replace(/\n(## )/g, "\n///\n$1");
+    md = PDFExportModal.insertAutoBreaks(md, s.autoBreakH1, s.autoBreakH2);
 
     const sections = splitMarkdownSections(md);
     const dims = PAGE_SIZES[s.pageSize] ?? PAGE_SIZES["A4"];
@@ -1231,7 +1321,7 @@ class PDFExportView extends ItemView {
     const sourcePath = this.currentFile?.path ?? "pdf-export";
 
     const sectionHtml = await Promise.all(
-      sections.map((sec) => renderMarkdownToHtml(this.app, sec.trim(), sourcePath, this)),
+      sections.map((sec) => renderMarkdownToHtml(this.app, sec.trim(), sourcePath, this.renderComponent)),
     );
 
     // Bail if a newer render has been requested while we were awaiting.
@@ -1243,11 +1333,12 @@ class PDFExportView extends ItemView {
     }
 
     const layouts = buildPageLayouts(allPages, s);
-    this.layoutCache = { layouts, pw, ph, mTop, mBottom, mLeft, mRight, footerH, headerH, contentW, contentH, docCSS, fontFamily: s.fontFamily, accentColor: s.accentColor };
+    this.layoutCache = { layouts, pw, ph, mTop, mLeft, footerH, headerH, contentW, contentH, docCSS, fontFamily: s.fontFamily, accentColor: s.accentColor };
 
     this.drawPreview(this.layoutCache, s.previewScale);
     this.pageCountEl.textContent = `${layouts.length} page${layouts.length !== 1 ? "s" : ""}`;
-    this.wordCountEl.textContent = `${this.editorEl.value.trim().split(/\s+/).filter(Boolean).length} words`;
+    // Render finished — restore the UI to its interactive state.
+    this.hideLoading();
   }
 
   // Re-draw from the cached layout without re-paginating (zoom-only change).
@@ -1256,8 +1347,24 @@ class PDFExportView extends ItemView {
     this.drawPreview(this.layoutCache, this.plugin.settings.previewScale);
   }
 
+  // ── Loading state helpers ────────────────────────────────────────────────────
+
+  /** Show the spinning overlay and disable the Render button. */
+  private showLoading() {
+    this.loadingOverlayEl.style.display = "flex";
+    this.renderBtn.disabled = true;
+    this.renderBtn.textContent = "Rendering…";
+  }
+
+  /** Hide the spinning overlay and restore the Render button. */
+  private hideLoading() {
+    this.loadingOverlayEl.style.display = "none";
+    this.renderBtn.disabled = false;
+    this.renderBtn.textContent = "⟳ Render PDF";
+  }
+
   private drawPreview(c: LayoutCache, scale: number) {
-    const { layouts, pw, ph, mTop, mLeft, footerH, headerH, contentW, contentH, docCSS, accentColor } = c;
+    const { layouts, pw, ph, mTop, mLeft, footerH, headerH, contentW, contentH, docCSS, fontFamily, accentColor } = c;
     const s = this.plugin.settings;
     this.previewEl.empty();
 
@@ -1269,13 +1376,10 @@ class PDFExportView extends ItemView {
     const idToPage = new Map<string, number>();
     for (const layout of layouts) {
       for (const node of layout.pageNodes) {
-        (node as HTMLElement).querySelectorAll("[id]").forEach((el) => {
+        node.querySelectorAll("[id]").forEach((el) => {
           if (!idToPage.has(el.id)) idToPage.set(el.id, layout.pageNum);
         });
-        if ((node as HTMLElement).id) {
-          if (!idToPage.has((node as HTMLElement).id))
-            idToPage.set((node as HTMLElement).id, layout.pageNum);
-        }
+        if (node.id && !idToPage.has(node.id)) idToPage.set(node.id, layout.pageNum);
       }
     }
 
@@ -1302,7 +1406,7 @@ class PDFExportView extends ItemView {
         hdr.textContent = layout.headerText;
         hdr.style.cssText = [
           "position:absolute", `top:${mTop * 0.4}px`, `right:${mLeft}px`,
-          "font-size:9px", "color:#999", `font-family:${s.fontFamily}`, "white-space:nowrap",
+          "font-size:9px", "color:#999", `font-family:${fontFamily}`, "white-space:nowrap",
         ].join(";");
       }
 
@@ -1332,7 +1436,7 @@ class PDFExportView extends ItemView {
           "position:absolute", "bottom:0", "left:0", "right:0",
           `height:${footerH}px`, "display:flex", "align-items:center",
           `border-top:0.5px solid ${accentColor}33`,
-          `padding:0 ${mLeft}px`, "font-size:9px", "color:#aaa", `font-family:${s.fontFamily}`,
+          `padding:0 ${mLeft}px`, "font-size:9px", "color:#aaa", `font-family:${fontFamily}`,
         ].join(";");
 
         if (layout.footerCenter) {
@@ -1359,27 +1463,52 @@ class PDFExportView extends ItemView {
   private async exportPDF() {
     const s = this.plugin.settings;
 
-    // Ensure we have a layout — run a full render if the panel was just opened.
+    // Disable the export button immediately so the user knows work is happening.
+    this.exportBtn.disabled = true;
+    this.exportBtn.textContent = "⬇ Exporting…";
+
+    // Helper to restore the button in every exit path.
+    const resetExportBtn = () => {
+      this.exportBtn.disabled = false;
+      this.exportBtn.textContent = "⬇ Export PDF";
+    };
+
+    // Ensure we have a layout — run a full render if the modal was just opened.
+    // We skip requestAnimationFrame here because the export button is already
+    // disabled; we don't need to yield for a paint before starting the work.
     if (!this.layoutCache) {
-      await new Promise<void>((resolve) => {
-        const token = ++this.renderToken;
-        requestAnimationFrame(() => void this.doRender(token).then(resolve));
-      });
+      // Cancel any pending debounced render — this export render supersedes it.
+      if (this.renderDebounceTimer !== null) {
+        clearTimeout(this.renderDebounceTimer);
+        this.renderDebounceTimer = null;
+      }
+      const token = ++this.renderToken;
+      this.showLoading();
+      try {
+        await this.doRender(token);
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        new Notice("Render error: " + msg);
+        this.hideLoading();
+        resetExportBtn();
+        return;
+      }
     }
 
     const cache = this.layoutCache;
     if (!cache || cache.layouts.length === 0) {
       new Notice("Nothing to export.");
+      resetExportBtn();
       return;
     }
 
-    const { layouts, pw, ph, mTop, mLeft, footerH, headerH, contentW, docCSS } = cache;
+    const { layouts, pw, ph, mTop, mLeft, footerH, headerH, contentW, docCSS, fontFamily, accentColor: exportAccent } = cache;
 
     const pageHTMLParts = layouts.map((layout) => {
-      const contentHTML = layout.pageNodes.map((n) => (n as HTMLElement).outerHTML).join("\n");
+      const contentHTML = layout.pageNodes.map((n) => n.outerHTML).join("\n");
 
       const headerHTML = s.showHeader && layout.headerText
-        ? `<div style="position:absolute;top:${mTop * 0.4}px;right:${mLeft}px;font-size:9px;color:#999;font-family:${s.fontFamily};white-space:nowrap;">${escapeHTML(layout.headerText)}</div>`
+        ? `<div style="position:absolute;top:${mTop * 0.4}px;right:${mLeft}px;font-size:9px;color:#999;font-family:${fontFamily};white-space:nowrap;">${escapeHTML(layout.headerText)}</div>`
         : "";
 
       const footerInnerHTML = layout.footerCenter
@@ -1387,7 +1516,7 @@ class PDFExportView extends ItemView {
         : `<span>${escapeHTML(layout.footerLeft)}</span><span style="margin-left:auto;">${escapeHTML(layout.footerRight)}</span>`;
 
       const footerHTML = s.showFooter
-        ? `<div style="position:absolute;bottom:0;left:0;right:0;height:${footerH}px;display:flex;align-items:center;border-top:0.5px solid ${cache.accentColor}33;padding:0 ${mLeft}px;font-size:9px;color:#aaa;font-family:${s.fontFamily};">${footerInnerHTML}</div>`
+        ? `<div style="position:absolute;bottom:0;left:0;right:0;height:${footerH}px;display:flex;align-items:center;border-top:0.5px solid ${exportAccent}33;padding:0 ${mLeft}px;font-size:9px;color:#aaa;font-family:${fontFamily};">${footerInnerHTML}</div>`
         : "";
 
       const contentDivHTML = `<div class="mpdf-doc" style="position:absolute;top:${mTop + headerH}px;left:${mLeft}px;width:${contentW}px;">${contentHTML}</div>`;
@@ -1397,7 +1526,7 @@ class PDFExportView extends ItemView {
 
     const printCSS = `
       *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-      @page { size: ${s.pageSize} ${s.orientation}; margin: 0; }
+      @page { size: ${pw}px ${ph}px; margin: 0; }
       html, body { margin: 0; padding: 0; background: #fff; }
       .mpdf-export-page {
         position: relative;
@@ -1422,8 +1551,14 @@ ${pageHTMLParts.join("\n")}
 </html>`;
 
     try {
-      const electron = (window as any).require("electron");
-      const remote   = electron.remote || electron;
+      // In Obsidian (Electron 14+) the `remote` module was moved out of the
+      // core `electron` package into the separate `@electron/remote` package.
+      // `electron.remote` is `undefined` on Electron 14+ (including Electron 39
+      // which ships with current Obsidian), so the old fallback
+      // `electron.remote || electron` silently used the plain `electron` object
+      // which has no `dialog` or `BrowserWindow` in the renderer process,
+      // causing every export to fail with the wrong error message.
+      const remote = (window as any).require("@electron/remote");
       if (!remote?.dialog) throw new Error("no remote");
 
       const res: { canceled: boolean; filePath?: string } = await remote.dialog.showSaveDialog({
@@ -1431,32 +1566,54 @@ ${pageHTMLParts.join("\n")}
         defaultPath: (this.currentFile?.basename ?? "export") + ".pdf",
         filters: [{ name: "PDF", extensions: ["pdf"] }],
       });
-      if (res.canceled || !res.filePath) return;
+      if (res.canceled || !res.filePath) {
+        resetExportBtn();
+        return;
+      }
+
+      // Let the user know the hidden window is generating the PDF.
+      new Notice("Generating PDF…");
 
       const blob = new Blob([fullHTML], { type: "text/html" });
       const url  = URL.createObjectURL(blob);
       const win  = new (remote.BrowserWindow)({ show: false, webPreferences: { nodeIntegration: false } });
 
       win.loadURL(url);
+
+      // Guard: both did-fail-load (subresource errors) and did-finish-load can fire
+      // for the same page load. This flag ensures we only act on the first one.
+      let exportHandled = false;
+      const cleanupWin = () => { URL.revokeObjectURL(url); win.close(); resetExportBtn(); };
+
+      // Guard against the page failing to load (OOM, sandbox restrictions, etc.).
+      // Without this, did-finish-load never fires and the UI permanently locks.
+      win.webContents.once("did-fail-load", (_event: unknown, _code: number, desc: string) => {
+        if (exportHandled) return;
+        exportHandled = true;
+        new Notice("PDF load error: " + desc);
+        cleanupWin();
+      });
+
       win.webContents.once("did-finish-load", () => {
+        if (exportHandled) return;
+        exportHandled = true;
         win.webContents
           .printToPDF({ pageSize: s.pageSize, landscape: s.orientation === "landscape", printBackground: true, margins: { marginType: "none" } })
           .then((data: Buffer) => {
-            require("fs").writeFile(res.filePath!, data, (err: Error | null) => {
+            (window as any).require("fs").writeFile(res.filePath!, data, (err: Error | null) => {
               if (err) new Notice("Error saving PDF: " + err.message);
               else     new Notice("✓ PDF saved: " + res.filePath);
-              win.close();
-              URL.revokeObjectURL(url);
+              cleanupWin();
             });
           })
           .catch((err: Error) => {
             new Notice("PDF render error: " + err.message);
-            win.close();
-            URL.revokeObjectURL(url);
+            cleanupWin();
           });
       });
     } catch {
       new Notice("Advanced PDF export requires the Obsidian desktop app.");
+      resetExportBtn();
     }
   }
 }
@@ -1466,12 +1623,52 @@ ${pageHTMLParts.join("\n")}
 class PDFExportSettingTab extends PluginSettingTab {
   plugin: MarkdownPDFPlugin;
 
+  /**
+   * Set to `true` whenever the user changes any setting while this tab is open.
+   * The live preview modal is re-rendered exactly once when the tab closes,
+   * rather than on every individual keystroke or toggle.
+   */
+  private dirty = false;
+
   constructor(app: App, plugin: MarkdownPDFPlugin) {
     super(app, plugin);
     this.plugin = plugin;
   }
 
+  /** Obsidian calls this when the tab becomes visible. */
   display(): void {
+    // Start fresh: if nothing changes before hide(), no render will happen.
+    this.dirty = false;
+    this.buildSettings();
+  }
+
+  /**
+   * Obsidian calls this when the user navigates away from the tab or closes
+   * the settings modal.  If any setting was changed we fire a single render
+   * now, which is far cheaper than rendering on every keystroke.
+   */
+  hide(): void {
+    if (this.dirty) {
+      this.dirty = false;
+      this.plugin.activeModal?.render(true);
+    }
+  }
+
+  /**
+   * Saves the current settings to disk and records that a re-render is
+   * pending.  The actual render is deferred until `hide()` fires.
+   */
+  private async markDirty(): Promise<void> {
+    this.dirty = true;
+    await this.plugin.saveSettings();
+  }
+
+  /**
+   * Builds (or re-builds) the settings UI.  Extracted from `display()` so
+   * that preset / reset handlers can refresh the form without resetting the
+   * dirty flag back to `false`.
+   */
+  private buildSettings(): void {
     const { containerEl } = this;
     containerEl.empty();
     const s = this.plugin.settings;
@@ -1487,8 +1684,10 @@ class PDFExportSettingTab extends PluginSettingTab {
         Object.entries(PRESETS).forEach(([k, v]) => d.addOption(k, v.name));
         d.setValue(s.preset).onChange(async (v) => {
           this.plugin.applyPreset(v);
-          await this.plugin.saveSettingsAndRender();
-          this.display();
+          await this.markDirty();
+          // Refresh the form so all controls show the new preset's values,
+          // but do NOT call display() — that would reset the dirty flag.
+          this.buildSettings();
         });
       })
       .addButton((b) =>
@@ -1496,8 +1695,8 @@ class PDFExportSettingTab extends PluginSettingTab {
          .setTooltip("Reset current preset to its default values")
          .onClick(async () => {
            this.plugin.applyPreset(s.preset);
-           await this.plugin.saveSettingsAndRender();
-           this.display();
+           await this.markDirty();
+           this.buildSettings();
          }),
       );
 
@@ -1507,7 +1706,7 @@ class PDFExportSettingTab extends PluginSettingTab {
       Object.keys(PAGE_SIZES).forEach((k) => d.addOption(k, k));
       d.setValue(s.pageSize).onChange(async (v) => {
         s.pageSize = v;
-        await this.plugin.saveSettingsAndRender();
+        await this.markDirty();
       });
     });
     new Setting(containerEl).setName("Orientation").addDropdown((d) =>
@@ -1515,7 +1714,7 @@ class PDFExportSettingTab extends PluginSettingTab {
        .setValue(s.orientation)
        .onChange(async (v) => {
          s.orientation = v as "portrait" | "landscape";
-         await this.plugin.saveSettingsAndRender();
+         await this.markDirty();
        }),
     );
 
@@ -1525,7 +1724,7 @@ class PDFExportSettingTab extends PluginSettingTab {
       new Setting(containerEl).setName(name).addText((t) =>
         t.setValue(String(s[key])).onChange(async (v) => {
           (s as any)[key] = parseInt(v) || 0;
-          await this.plugin.saveSettingsAndRender();
+          await this.markDirty();
         }),
       );
     marginSetting("Top",    "marginTop");
@@ -1545,32 +1744,37 @@ class PDFExportSettingTab extends PluginSettingTab {
         "'Trebuchet MS', sans-serif":              "Trebuchet",
         "'Courier New', monospace":                "Courier New",
       }).setValue(s.fontFamily)
-       .onChange(async (v) => { s.fontFamily = v; await this.plugin.saveSettingsAndRender(); }),
+       .onChange(async (v) => { s.fontFamily = v; await this.markDirty(); }),
     );
     new Setting(containerEl).setName("Font size (px)").addDropdown((d) => {
       ["10","11","12","13","14","15","16"].forEach((v) => d.addOption(v, v + "px"));
       d.setValue(String(s.fontSize)).onChange(async (v) => {
         s.fontSize = parseInt(v);
-        await this.plugin.saveSettingsAndRender();
+        await this.markDirty();
       });
     });
+    new Setting(containerEl).setName("Code font size").addDropdown((d) =>
+      d.addOptions({ "0.75": "0.75em", "0.80": "0.80em", "0.82": "0.82em", "0.85": "0.85em", "0.88": "0.88em", "0.90": "0.90em", "1.0": "1.00em" })
+       .setValue(String(s.codeFontSize))
+       .onChange(async (v) => { s.codeFontSize = parseFloat(v); await this.markDirty(); }),
+    );
     new Setting(containerEl).setName("Line height").addDropdown((d) =>
       d.addOptions({ "1.4": "Tight (1.4)", "1.6": "Compact (1.6)", "1.75": "Normal (1.75)", "1.85": "Relaxed (1.85)", "2.0": "Double (2.0)" })
        .setValue(String(s.lineHeight))
-       .onChange(async (v) => { s.lineHeight = parseFloat(v); await this.plugin.saveSettingsAndRender(); }),
+       .onChange(async (v) => { s.lineHeight = parseFloat(v); await this.markDirty(); }),
     );
     new Setting(containerEl).setName("Paragraph spacing").addDropdown((d) =>
       d.addOptions({ "0": "None", "0.3": "Tight (0.3em)", "0.5": "Normal (0.5em)", "0.65": "Relaxed (0.65em)", "1.0": "Wide (1em)" })
        .setValue(String(s.paragraphSpacing))
-       .onChange(async (v) => { s.paragraphSpacing = parseFloat(v); await this.plugin.saveSettingsAndRender(); }),
+       .onChange(async (v) => { s.paragraphSpacing = parseFloat(v); await this.markDirty(); }),
     );
     new Setting(containerEl)
       .setName("Heading scale")
       .setDesc("Multiplier applied to all heading sizes.")
       .addDropdown((d) =>
-        d.addOptions({ "0.8": "Small (0.8×)", "0.9": "Compact (0.9×)", "1.0": "Normal (1.0×)", "1.1": "Large (1.1×)", "1.2": "XLarge (1.2×)" })
+        d.addOptions({ "0.8": "Small (0.8×)", "0.88": "0.88×", "0.9": "Compact (0.9×)", "0.95": "0.95×", "1.0": "Normal (1.0×)", "1.05": "1.05×", "1.1": "Large (1.1×)", "1.2": "XLarge (1.2×)" })
          .setValue(String(s.headingScale))
-         .onChange(async (v) => { s.headingScale = parseFloat(v); await this.plugin.saveSettingsAndRender(); }),
+         .onChange(async (v) => { s.headingScale = parseFloat(v); await this.markDirty(); }),
       );
 
     // ── Colors ────────────────────────────────────────────────────────────────
@@ -1579,12 +1783,13 @@ class PDFExportSettingTab extends PluginSettingTab {
       new Setting(containerEl).setName(name).addColorPicker((cp) =>
         cp.setValue(String(s[key])).onChange(async (v) => {
           (s as any)[key] = v;
-          await this.plugin.saveSettingsAndRender();
+          await this.markDirty();
         }),
       );
     colorSetting("Accent color",            "accentColor");
     colorSetting("Body text color",         "bodyColor");
     colorSetting("Heading color",           "headingColor");
+    colorSetting("Blockquote background",   "blockquoteBg");
     colorSetting("Blockquote border",       "blockquoteBorderColor");
     colorSetting("Table header background", "tableHeaderBg");
     colorSetting("Code background",         "codeBackground");
@@ -1592,43 +1797,43 @@ class PDFExportSettingTab extends PluginSettingTab {
     // ── Heading style ─────────────────────────────────────────────────────────
     containerEl.createEl("h3", { text: "Heading Style" });
     new Setting(containerEl).setName("H1 bottom border").addToggle((t) =>
-      t.setValue(s.h1BorderBottom).onChange(async (v) => { s.h1BorderBottom = v; await this.plugin.saveSettingsAndRender(); }),
+      t.setValue(s.h1BorderBottom).onChange(async (v) => { s.h1BorderBottom = v; await this.markDirty(); }),
     );
     new Setting(containerEl).setName("H2 bottom border").addToggle((t) =>
-      t.setValue(s.h2BorderBottom).onChange(async (v) => { s.h2BorderBottom = v; await this.plugin.saveSettingsAndRender(); }),
+      t.setValue(s.h2BorderBottom).onChange(async (v) => { s.h2BorderBottom = v; await this.markDirty(); }),
     );
     new Setting(containerEl).setName("Center H1").addToggle((t) =>
-      t.setValue(s.centerH1).onChange(async (v) => { s.centerH1 = v; await this.plugin.saveSettingsAndRender(); }),
+      t.setValue(s.centerH1).onChange(async (v) => { s.centerH1 = v; await this.markDirty(); }),
     );
 
     // ── Tables ────────────────────────────────────────────────────────────────
     containerEl.createEl("h3", { text: "Tables" });
     new Setting(containerEl).setName("Striped rows").addToggle((t) =>
-      t.setValue(s.tableStriped).onChange(async (v) => { s.tableStriped = v; await this.plugin.saveSettingsAndRender(); }),
+      t.setValue(s.tableStriped).onChange(async (v) => { s.tableStriped = v; await this.markDirty(); }),
     );
 
     // ── Header & Footer ───────────────────────────────────────────────────────
     containerEl.createEl("h3", { text: "Header & Footer" });
     new Setting(containerEl).setName("Show header").addToggle((t) =>
-      t.setValue(s.showHeader).onChange(async (v) => { s.showHeader = v; await this.plugin.saveSettingsAndRender(); }),
+      t.setValue(s.showHeader).onChange(async (v) => { s.showHeader = v; await this.markDirty(); }),
     );
     new Setting(containerEl)
       .setName("Header text")
       .setDesc("Appears top-right on every page.")
-      .addText((t) => t.setValue(s.headerText).onChange(async (v) => { s.headerText = v; await this.plugin.saveSettingsAndRender(); }));
+      .addText((t) => t.setValue(s.headerText).onChange(async (v) => { s.headerText = v; await this.markDirty(); }));
     new Setting(containerEl).setName("Show footer").addToggle((t) =>
-      t.setValue(s.showFooter).onChange(async (v) => { s.showFooter = v; await this.plugin.saveSettingsAndRender(); }),
+      t.setValue(s.showFooter).onChange(async (v) => { s.showFooter = v; await this.markDirty(); }),
     );
     new Setting(containerEl)
       .setName("Footer text")
-      .addText((t) => t.setValue(s.footerText).onChange(async (v) => { s.footerText = v; await this.plugin.saveSettingsAndRender(); }));
+      .addText((t) => t.setValue(s.footerText).onChange(async (v) => { s.footerText = v; await this.markDirty(); }));
     new Setting(containerEl).setName("Show page numbers").addToggle((t) =>
-      t.setValue(s.showPageNumbers).onChange(async (v) => { s.showPageNumbers = v; await this.plugin.saveSettingsAndRender(); }),
+      t.setValue(s.showPageNumbers).onChange(async (v) => { s.showPageNumbers = v; await this.markDirty(); }),
     );
     new Setting(containerEl).setName("Page number position").addDropdown((d) =>
       d.addOptions({ left: "Left", center: "Center", right: "Right" })
        .setValue(s.pageNumberPosition)
-       .onChange(async (v) => { s.pageNumberPosition = v as "left"|"center"|"right"; await this.plugin.saveSettingsAndRender(); }),
+       .onChange(async (v) => { s.pageNumberPosition = v as "left"|"center"|"right"; await this.markDirty(); }),
     );
 
     // ── Behaviour ─────────────────────────────────────────────────────────────
@@ -1642,14 +1847,14 @@ class PDFExportSettingTab extends PluginSettingTab {
       .addToggle((t) =>
         t.setValue(s.includeFilenameAsTitle).onChange(async (v) => {
           s.includeFilenameAsTitle = v;
-          await this.plugin.saveSettingsAndRender();
+          await this.markDirty();
         }),
       );
     new Setting(containerEl).setName("Auto page break before H1").addToggle((t) =>
-      t.setValue(s.autoBreakH1).onChange(async (v) => { s.autoBreakH1 = v; await this.plugin.saveSettingsAndRender(); }),
+      t.setValue(s.autoBreakH1).onChange(async (v) => { s.autoBreakH1 = v; await this.markDirty(); }),
     );
     new Setting(containerEl).setName("Auto page break before H2").addToggle((t) =>
-      t.setValue(s.autoBreakH2).onChange(async (v) => { s.autoBreakH2 = v; await this.plugin.saveSettingsAndRender(); }),
+      t.setValue(s.autoBreakH2).onChange(async (v) => { s.autoBreakH2 = v; await this.markDirty(); }),
     );
   }
 }

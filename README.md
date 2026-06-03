@@ -1,56 +1,45 @@
 # Advanced PDF Export — Obsidian Plugin
 
-Export Obsidian notes as pixel-perfect PDFs with six style presets, manual page breaks, full layout control, and a live preview — all from the plugin panel.
+Export Obsidian notes as pixel-perfect PDFs with six style presets, manual page breaks, full layout control, and a live preview — all from a full-screen modal panel.
 
 > **Desktop only** — requires the Obsidian desktop app (uses Electron's print pipeline).
 
 ![Main panel with live preview](screenshots/preview.png)
+<!-- Replace with a screenshot of the open modal showing the editor + preview side-by-side -->
 
 
 ## Features
 
-- **Manual preview rendering** — click **⟳ Render PDF** button or press `Ctrl+Enter` / `Cmd+Enter` to update the preview
-- **Copy content to editor** — click **copy from note** button to load the current note into the editor (changes are local, non-destructive)
-- **Style presets** — six built-in presets (Default, Minimal, Academic, Colorful, Modern, Newspaper), each with a Reset button
-- **Manual page breaks** — type `///` on its own line to force a page break
-- **Auto page breaks** — optional: insert page break before every `#` (H1) or `##` (H2) heading
+- **Live preview** — markdown editor on the left, paginated page preview on the right; render with **⟳ Render PDF** or `Ctrl+Enter`
+- **Auto-loads active note** — opening from a note's right-click menu or command palette pre-fills the editor (edits are local, non-destructive)
+- **Style presets** — six built-in presets: Default, Minimal, Academic, Colorful, Modern, Newspaper
+- **Page breaks** — `///` on its own line for a manual break; optionally auto-insert before every H1 or H2
 - **Page size & orientation** — A4, A3, A5, Letter, Legal × Portrait / Landscape
-- **Full margin control** — top, bottom, left, right (mm)
-- **Typography** — font family, size, line height, paragraph spacing, heading scale
-- **Colors** — accent, body text, headings, blockquote border, table header background, code background
-- **Heading styles** — per-heading bottom border toggles, center H1
-- **Tables** — optional striped rows
+- **Full layout control** — margins, font family/size/line height, paragraph spacing, heading scale, colors, heading borders, striped tables
 - **Header & footer** — custom text, page numbers (X / Y), position control
-- **Zoom slider** — scale preview 35%–100% without re-paginating
-- **Pixel-perfect export** — generates PDF via Electron's `printToPDF`; exported PDF matches preview exactly
 
 
 ## Screenshots
 
-### Page Breaks
-Type `///` on its own line to insert a hard page break
+### Panel Overview
+![Quick Use overview](screenshots/overview.png)
 
-![Page break syntax in action](screenshots/usage.png)
+### Page Breaks
+Type `///` on its own line, or click the **Insert Page Break** button in the toolbar
+
+![Page break syntax](screenshots/usage.png)
+<!-- Replace with a screenshot showing /// in the editor and the resulting page split in preview -->
 
 ### Style Presets
-Presets configurations can be changed from settings
-
-![Style preset dropdown](screenshots/style1.png)
+![Preset dropdown in topbar](screenshots/style1.png)
+<!-- Replace with a screenshot of the Style dropdown in the topbar -->
 
 ![Academic preset](screenshots/style2.png)
 
-![Academic preset — alternate view](screenshots/style3.png)
-
-and more...
+![Modern preset](screenshots/style3.png)
 
 ### Settings Panel
-
-![Page & Preset settings](screenshots/settings1.png)
-
-![Typography & Colors settings](screenshots/settings2.png)
-
-![Heading Style, Tables & Header/Footer settings](screenshots/settings3.png)
-
+Go to settings Reference for settings screenshots
 
 ## Installation
 
@@ -63,28 +52,34 @@ and more...
 
 ## Usage
 
-**Open the panel** — click the `file-output` icon in the left ribbon, or `Ctrl/Cmd + P` → *Open Advanced PDF Export panel*. The panel opens in the right sidebar.
+**Open the panel** — right-click any `.md` file in the file explorer, or use `Ctrl/Cmd + P` → *Advanced PDF Export: Open Panel*. The panel opens as a full-screen modal and auto-loads the target note.
 
-**Load a note** — click on a note then click on **copy from note** button to load the active note into the editor. Edits are local to this panel; they don't sync back to your vault (by design, for layout-only adjustments).
+**Edit markdown** — type or paste markdown in the left editor. The editor does not sync changes back to your vault.
 
-**Edit markdown** — type or paste markdown in the editor.
+**Insert a page break** — type `///` on its own line, or click **Insert Page Break** in the topbar. Use `---` for a horizontal rule.
 
-**Insert Pagebreak** -  Use `///` on its own line for a page break(new page).
+**Render the preview** — click **⟳ Render PDF** or press `Ctrl+Enter` / `Cmd+Enter`.
 
-**Export** — click **⬇ Export PDF** in the top bar to open a native save dialog and generate the PDF.
+**Change style or page settings** — use the **Style**, **Size**, and **Orient** dropdowns in the topbar. Changes re-render automatically.
 
-**Open settings** — click the ⚙ icon in the top bar, or go to **Settings → Advanced PDF Export**.
+**Export** — click **⬇ Export PDF** to open a native save dialog and write the PDF to disk.
+
+**Open settings** — click the ⚙ icon in the topbar, or go to **Settings → Advanced PDF Export**.
 
 
 ## Settings Reference
 
-Go to **Settings → Advanced PDF Export** to configure defaults. All settings reflect immediately in the live preview.
+All settings take effect after closing the settin.
+<img src="screenshots/settings1.png" width="75%" />
+<img src="screenshots/settings2.png" width="75%" />
+<img src="screenshots/settings3.png" width="75%" />
+<img src="screenshots/settings4.png" width="75%" />
 
 ### Style Preset
 | Setting | Description |
 |---|---|
 | Preset | Style theme: Default, Minimal, Academic, Colorful, Modern, Newspaper |
-| Reset Preset | Restores all typographic and color values for the current preset to its defaults |
+| Reset Preset | Restores all typographic and color values for the current preset to defaults |
 
 ### Page
 | Setting | Description |
@@ -100,7 +95,7 @@ Go to **Settings → Advanced PDF Export** to configure defaults. All settings r
 | Font size | 10 – 16 px |
 | Line height | Tight (1.4) → Double (2.0) |
 | Paragraph spacing | None → Wide (1em) |
-| Heading scale | 0.8× → 1.2× multiplier on all heading sizes |
+| Heading scale | 0.8× → 1.2× multiplier applied to all heading sizes |
 
 ### Colors
 Accent · Body text · Headings · Blockquote border · Table header background · Code background
@@ -120,9 +115,9 @@ Accent · Body text · Headings · Blockquote border · Table header background 
 ### Header & Footer
 | Setting | Description |
 |---|---|
-| Show header | Toggle the header bar on or off |
+| Show header | Toggle the header on or off |
 | Header text | Custom text shown top-right on every page |
-| Show footer | Toggle the footer bar on or off |
+| Show footer | Toggle the footer on or off |
 | Footer text | Custom text shown in the footer |
 | Show page numbers | Toggle *Page X / Y* display |
 | Page number position | Left, Center, or Right |
@@ -130,8 +125,9 @@ Accent · Body text · Headings · Blockquote border · Table header background 
 ### Behaviour
 | Setting | Description |
 |---|---|
-| Auto page break before H1 | Inserts `///` before every `#` heading |
-| Auto page break before H2 | Inserts `///` before every `##` heading |
+| Include file name as title | Prepends the note's filename as an H1 at the top of the PDF |
+| Auto page break before H1 | Inserts a page break before every `#` heading |
+| Auto page break before H2 | Inserts a page break before every `##` heading |
 
 
 ## License

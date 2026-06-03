@@ -1,19 +1,69 @@
-/* ── Obsidian Advanced PDF Export Plugin Styles ─────────────────────────── */
+/* Advanced PDF Export — plugin styles */
 
-/* Top bar */
+/* Modal sizing */
+
+.mpdf-modal {
+  width: 96vw;
+  max-width: 1800px;
+  height: 90vh;
+  max-height: 90vh;
+  overflow: hidden;
+}
+
+.mpdf-modal .modal-content {
+  padding: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+/* Top bar — three-section flex layout: controls | title | actions */
 .mpdf-topbar {
   display: flex;
   align-items: center;
-  gap: 8px;
   padding: 0 12px;
   height: 44px;
   background: var(--background-secondary);
   border-bottom: 1px solid var(--background-modifier-border);
   flex-shrink: 0;
-  flex-wrap: nowrap;
-  overflow-x: auto;
+  gap: 0;
+  overflow: hidden;
 }
 
+/* Left group: style/size/zoom controls */
+.mpdf-topbar-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+
+/* Centered note title */
+.mpdf-topbar-title {
+  flex-shrink: 0;
+  max-width: 28%;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-normal);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding: 0 16px;
+  text-align: center;
+  opacity: 0.85;
+}
+
+/* Right group: page count + action buttons */
+.mpdf-topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  justify-content: flex-end;
+}
+
+/* Control group (label + input) */
 .mpdf-ctrl {
   display: flex;
   align-items: center;
@@ -83,6 +133,14 @@
   height: 16px;
 }
 
+/* Disabled state — used while rendering or exporting */
+.mpdf-btn:disabled,
+.mpdf-btn-primary:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
 .mpdf-page-count {
   font-size: 11px;
   color: var(--text-muted);
@@ -108,48 +166,7 @@
   flex-shrink: 0;
 }
 
-/* Source file bar — compact single line: [↓ Replace] note-name.md */
-.mpdf-source-bar {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 3px 10px;
-  background: var(--background-secondary);
-  border-bottom: 1px solid var(--background-modifier-border);
-  flex-shrink: 0;
-  min-height: 28px;
-}
-
-.mpdf-btn-replace {
-  padding: 2px 7px;
-  font-size: 11px;
-  flex-shrink: 0;
-}
-
-.mpdf-btn-clear {
-  padding: 2px 7px;
-  font-size: 11px;
-  flex-shrink: 0;
-  color: var(--text-error, #e05252);
-  border-color: var(--text-error, #e05252);
-  opacity: 0.75;
-}
-
-.mpdf-btn-clear:hover {
-  border-color: var(--text-error, #e05252) !important;
-  color: var(--text-error, #e05252) !important;
-  opacity: 1;
-}
-
-.mpdf-source-label {
-  font-size: 11px;
-  color: var(--text-muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  font-family: var(--font-monospace);
-}
-
+/* Editor textarea */
 .mpdf-editor {
   flex: 1;
   background: transparent;
@@ -168,16 +185,14 @@
   color: var(--text-faint);
 }
 
-.mpdf-editor-footer {
+/* Preview container — wraps the scrollable preview and the non-scrolling
+   loading overlay as siblings so the overlay never scrolls with the pages. */
+.mpdf-preview-container {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
   display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 4px 12px;
-  border-top: 1px solid var(--background-modifier-border);
-  font-size: 11px;
-  color: var(--text-faint);
-  flex-shrink: 0;
-  background: var(--background-secondary);
+  flex-direction: column;
 }
 
 /* Preview panel */
@@ -188,17 +203,52 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 28px 20px;
+  padding: 28px 20px 48px; /* extra bottom so last page label isn't clipped */
   gap: 24px;
-  /* Extra bottom padding so the last page label is never clipped */
-  padding-bottom: 48px;
 }
 
-/* Page wrapper — sized to the scaled footprint so the flex gap is correct */
+/* Loading overlay — sits on top of the preview, hidden by default.
+   Shown (display:flex) whenever a render or initial open is in progress. */
+.mpdf-loading-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.38);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+  display: none; /* toggled to flex in JS */
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  z-index: 20;
+  pointer-events: none; /* let clicks through to cancel/settings while loading */
+}
+
+.mpdf-spinner {
+  width: 34px;
+  height: 34px;
+  border: 3px solid rgba(255, 255, 255, 0.12);
+  border-top-color: var(--interactive-accent);
+  border-radius: 50%;
+  animation: mpdf-spin 0.65s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes mpdf-spin {
+  to { transform: rotate(360deg); }
+}
+
+.mpdf-loading-text {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.65);
+  font-family: var(--font-interface);
+  letter-spacing: 0.02em;
+}
+
+/* Page wrapper — width/height set inline to match the scaled page footprint */
 .mpdf-page-wrap {
   position: relative;
   flex-shrink: 0;
-  /* width/height set inline per-page */
 }
 
 .mpdf-page-label {
@@ -211,22 +261,19 @@
   white-space: nowrap;
 }
 
-/* Clips the CSS-scaled full-res page back to its visual footprint */
+/* Clips the scaled full-res page to its visual footprint — width/height set inline */
 .mpdf-page-scale {
   overflow: hidden;
   position: relative;
-  /* width/height set inline */
 }
 
-/* Full-resolution page (scaled down via transform in JS) */
+/* Full-resolution page, scaled down via CSS transform — width/height/transform set inline */
 .mpdf-page {
   background: #ffffff;
   position: absolute;
   top: 0;
   left: 0;
   box-shadow:
-  0 2px 8px rgba(0, 0, 0, 0.3),
-  0 8px 32px rgba(0, 0, 0, 0.25);
-  /* width/height/transform set inline */
+    0 2px 8px rgba(0, 0, 0, 0.3),
+    0 8px 32px rgba(0, 0, 0, 0.25);
 }
-
