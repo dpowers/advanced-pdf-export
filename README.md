@@ -22,8 +22,7 @@ Export Obsidian notes as pixel-perfect PDFs with six style presets, manual page 
 ## Screenshots
 
 ### Panel Overview
-![Split-pane modal: editor on the left, live page preview on the right](screenshots/preview.png)
-<!-- Replace with a screenshot of the full modal open -->
+![Quick Use overview](screenshots/overview.png)
 
 ### Page Breaks
 Type `///` on its own line, or click the **Insert Page Break** button in the toolbar
