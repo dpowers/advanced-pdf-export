@@ -928,6 +928,50 @@ export default class MarkdownPDFPlugin extends Plugin {
   }
 }
 
+// ─── File resolver ────────────────────────────────────────────────────────────
+
+/**
+ * Find the best markdown file to load when the modal opens.
+ *
+ * Four-level cascade so every real-world scenario is handled:
+ *
+ *  1. `initialFile`            — passed explicitly (right-click menu, command
+ *                                with a specific file target). Always wins.
+ *  2. `getActiveViewOfType`    — a MarkdownView is the currently focused leaf.
+ *                                The common case when the user clicks a note tab
+ *                                and then opens the panel.
+ *  3. `getActiveFile`          — "returns the most recently active file" per
+ *                                the Obsidian API docs. Covers the case where
+ *                                the file explorer sidebar retains focus after
+ *                                the user clicks a file to open it.
+ *  4. `getMostRecentLeaf`      — searches rootSplit (the main editor area),
+ *                                explicitly ignoring sidebar leaves. Per the
+ *                                Obsidian docs: "useful for interacting with
+ *                                the leaf in the root split while a sidebar
+ *                                leaf might be active." Covers fresh Obsidian
+ *                                startup where nothing has been clicked yet,
+ *                                and works regardless of which file-manager
+ *                                plugin (built-in or third-party) is in use.
+ */
+function resolveActiveMarkdownFile(app: App, initialFile?: TFile | null): TFile | null {
+  if (initialFile) return initialFile;
+
+  // Level 2: focused MarkdownView
+  const fromView = app.workspace.getActiveViewOfType(MarkdownView)?.file;
+  if (fromView) return fromView;
+
+  // Level 3: most recently active file (works when file-explorer has focus)
+  const activeFile = app.workspace.getActiveFile();
+  if (activeFile?.extension === "md") return activeFile;
+
+  // Level 4: most recently active leaf in the main editor split
+  // (works on fresh startup before any interaction, and is file-manager-agnostic)
+  const leaf = app.workspace.getMostRecentLeaf();
+  if (leaf?.view instanceof MarkdownView) return (leaf.view as MarkdownView).file ?? null;
+
+  return null;
+}
+
 // ─── Modal ────────────────────────────────────────────────────────────────────
 
 class PDFExportModal extends Modal {
@@ -963,11 +1007,7 @@ class PDFExportModal extends Modal {
     this.contentEl.style.cssText = "display:flex;flex-direction:column;height:100%;padding:0;overflow:hidden;";
     this.buildUI(this.contentEl);
 
-    // Prefer the file passed explicitly (e.g. from the right-click menu),
-    // then fall back to whatever note is currently open in the editor.
-    const file = this.initialFile
-      ?? this.app.workspace.getActiveViewOfType(MarkdownView)?.file
-      ?? null;
+    const file = resolveActiveMarkdownFile(this.app, this.initialFile);
 
     if (file) {
       this.currentFile = file;
