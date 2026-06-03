@@ -293,12 +293,15 @@ function slugifyHeading(text: string): string {
 }
 
 /**
- * Single post-processing pass over Obsidian's rendered HTML that:
+ * Post-processing passes over Obsidian's rendered HTML:
  *
  * 1. Assigns `id` attributes to all h1–h6 so `#fragment` links have targets.
  * 2. Strips the `external-link` class from <a> elements so Obsidian's theme
  *    CSS never gets a chance to inject the ↗ icon (works even when the theme
  *    rule has higher specificity than our own `.mpdf-doc` scoped rule).
+ * 3. Removes copy-code buttons that Obsidian injects into every fenced code
+ *    block — they are interactive UI widgets that have no place in a PDF or
+ *    a read-only print preview.
  */
 function postProcessRenderedHTML(root: HTMLElement): void {
   // ── Pass 1: assign heading IDs ────────────────────────────────────────────
@@ -314,12 +317,18 @@ function postProcessRenderedHTML(root: HTMLElement): void {
     el.id = id;
   });
 
-  // ── Pass 2: fix all anchor elements ────────────────────────────────────────
+  // ── Pass 2: fix all anchor elements ──────────────────────────────────────
   root.querySelectorAll<HTMLAnchorElement>("a").forEach((a) => {
     // Remove the Obsidian-added class that triggers the external link icon.
     // This is the only reliable way to beat the theme's unscoped CSS rule.
     a.classList.remove("external-link");
   });
+
+  // ── Pass 3: strip copy-code buttons ──────────────────────────────────────
+  // Obsidian injects a .copy-code-button into every rendered <pre> block.
+  // Removing the nodes here ensures they never reach the paginator, the
+  // preview DOM, or the exported PDF HTML — regardless of CSS.
+  root.querySelectorAll(".copy-code-button").forEach((el) => el.remove());
 }
 
 // ─── CSS generator ────────────────────────────────────────────────────────────
@@ -436,6 +445,10 @@ function buildDocCSS(s: PDFExportSettings): string {
   .mpdf-doc img { max-width: 100%; height: auto; display: block; margin: ${s.paragraphSpacing}em auto; }
   .mpdf-doc a { color: ${s.accentColor}; }
   .mpdf-doc a.external-link::after { display: none !important; content: none !important; }
+  /* Belt-and-suspenders: hide any copy-code button Obsidian re-injects after
+     the DOM-removal pass in postProcessRenderedHTML (e.g. via a MutationObserver
+     or a theme that adds its own variant with different timing). */
+  .mpdf-doc .copy-code-button { display: none !important; }
   .mpdf-doc table { width: 100%; border-collapse: collapse; margin: 0 0 ${s.paragraphSpacing}em; font-size: 0.92em; }
   .mpdf-doc th {
     background: ${s.tableHeaderBg};
@@ -933,39 +946,33 @@ export default class MarkdownPDFPlugin extends Plugin {
 /**
  * Find the best markdown file to load when the modal opens.
  *
- * Four-level cascade so every real-world scenario is handled:
+ * Four-level cascade so every real-world scenario is covered:
  *
- *  1. `initialFile`            — passed explicitly (right-click menu, command
- *                                with a specific file target). Always wins.
- *  2. `getActiveViewOfType`    — a MarkdownView is the currently focused leaf.
- *                                The common case when the user clicks a note tab
- *                                and then opens the panel.
- *  3. `getActiveFile`          — "returns the most recently active file" per
- *                                the Obsidian API docs. Covers the case where
- *                                the file explorer sidebar retains focus after
- *                                the user clicks a file to open it.
- *  4. `getMostRecentLeaf`      — searches rootSplit (the main editor area),
- *                                explicitly ignoring sidebar leaves. Per the
- *                                Obsidian docs: "useful for interacting with
- *                                the leaf in the root split while a sidebar
- *                                leaf might be active." Covers fresh Obsidian
- *                                startup where nothing has been clicked yet,
- *                                and works regardless of which file-manager
- *                                plugin (built-in or third-party) is in use.
+ *  1. `initialFile`         — passed explicitly (right-click menu, command
+ *                             with a specific file). Always wins.
+ *  2. `getActiveViewOfType` — a MarkdownView is the currently focused leaf.
+ *                             The common case when a note tab is open and active.
+ *  3. `getActiveFile`       — "returns the most recently active file" per the
+ *                             Obsidian API docs. Covers the case where the file
+ *                             explorer sidebar retains focus after the user
+ *                             clicks a file to open it.
+ *  4. `getMostRecentLeaf`   — searches rootSplit (the main editor area),
+ *                             explicitly ignoring sidebar leaves. The Obsidian
+ *                             docs describe it as "useful for interacting with
+ *                             the leaf in the root split while a sidebar leaf
+ *                             might be active." Covers fresh Obsidian startup
+ *                             before any click, and is file-manager-agnostic so
+ *                             it works with any third-party file manager plugin.
  */
 function resolveActiveMarkdownFile(app: App, initialFile?: TFile | null): TFile | null {
   if (initialFile) return initialFile;
 
-  // Level 2: focused MarkdownView
   const fromView = app.workspace.getActiveViewOfType(MarkdownView)?.file;
   if (fromView) return fromView;
 
-  // Level 3: most recently active file (works when file-explorer has focus)
   const activeFile = app.workspace.getActiveFile();
   if (activeFile?.extension === "md") return activeFile;
 
-  // Level 4: most recently active leaf in the main editor split
-  // (works on fresh startup before any interaction, and is file-manager-agnostic)
   const leaf = app.workspace.getMostRecentLeaf();
   if (leaf?.view instanceof MarkdownView) return (leaf.view as MarkdownView).file ?? null;
 
@@ -1369,13 +1376,10 @@ class PDFExportModal extends Modal {
     const idToPage = new Map<string, number>();
     for (const layout of layouts) {
       for (const node of layout.pageNodes) {
-        (node as HTMLElement).querySelectorAll("[id]").forEach((el) => {
+        node.querySelectorAll("[id]").forEach((el) => {
           if (!idToPage.has(el.id)) idToPage.set(el.id, layout.pageNum);
         });
-        if ((node as HTMLElement).id) {
-          if (!idToPage.has((node as HTMLElement).id))
-            idToPage.set((node as HTMLElement).id, layout.pageNum);
-        }
+        if (node.id && !idToPage.has(node.id)) idToPage.set(node.id, layout.pageNum);
       }
     }
 
@@ -1498,10 +1502,10 @@ class PDFExportModal extends Modal {
       return;
     }
 
-    const { layouts, pw, ph, mTop, mLeft, footerH, headerH, contentW, contentH, docCSS, fontFamily, accentColor: exportAccent } = cache;
+    const { layouts, pw, ph, mTop, mLeft, footerH, headerH, contentW, docCSS, fontFamily, accentColor: exportAccent } = cache;
 
     const pageHTMLParts = layouts.map((layout) => {
-      const contentHTML = layout.pageNodes.map((n) => (n as HTMLElement).outerHTML).join("\n");
+      const contentHTML = layout.pageNodes.map((n) => n.outerHTML).join("\n");
 
       const headerHTML = s.showHeader && layout.headerText
         ? `<div style="position:absolute;top:${mTop * 0.4}px;right:${mLeft}px;font-size:9px;color:#999;font-family:${fontFamily};white-space:nowrap;">${escapeHTML(layout.headerText)}</div>`
