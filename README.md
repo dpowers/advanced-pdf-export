@@ -39,9 +39,9 @@ Type `///` on its own line, or click the **Insert Page Break** button in the too
 ![Modern preset](screenshots/style3.png)
 
 ### Settings Panel
-<img src="screenshots/settings1.png" width="49%" /><img src="screenshots/settings2.png" width="49%" />
+<img src="screenshots/settings1.png" width="49%" /><img src="screenshots/settings4.png" width="49%" />
 
-<img src="screenshots/settings3.png" width="49%" /><img src="screenshots/settings4.png" width="49%" />
+<img src="screenshots/settings3.png" width="49%" /><img src="screenshots/settings2.png" width="49%" />
 
 ## Installation
 
