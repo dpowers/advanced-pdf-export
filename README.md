@@ -40,9 +40,9 @@ Type `///` on its own line, or click the **Insert Page Break** button in the too
 
 ### Settings Panel
 
-<img src="screenshots/settings1.png" width="85%" /><img src="screenshots/settings2.png" width="85%" />
+<img src="screenshots/settings1.png" width="75%" /><img src="screenshots/settings2.png" width="75%" />
 
-<img src="screenshots/settings3.png" width="85%" /><img src="screenshots/settings4.png" width="85%" />
+<img src="screenshots/settings3.png" width="75%" /><img src="screenshots/settings4.png" width="75%" />
 
 ## Installation
 
