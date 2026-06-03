@@ -15,7 +15,7 @@ Export Obsidian notes as pixel-perfect PDFs with six style presets, manual page 
 - **Style presets** — six built-in presets: Default, Minimal, Academic, Colorful, Modern, Newspaper
 - **Page breaks** — `///` on its own line for a manual break; optionally auto-insert before every H1 or H2
 - **Page size & orientation** — A4, A3, A5, Letter, Legal × Portrait / Landscape
-- **Full layout control** — margins, font family/size/line height, paragraph spacing, heading scale, colors, heading borders, striped tables
+- **Full layout control** — margins, font family/size/line height, paragraph spacing, heading scale, code font size, colors, heading borders, striped tables
 - **Header & footer** — custom text, page numbers (X / Y), position control
 
 
@@ -32,16 +32,19 @@ Type `///` on its own line, or click the **Insert Page Break** button in the too
 
 ### Style Presets
 ![Preset dropdown in topbar](screenshots/style1.png)
-<!-- Replace with a screenshot of the Style dropdown in the topbar -->
 
 ![Academic preset](screenshots/style2.png)
 
 ![Modern preset](screenshots/style3.png)
 
 ### Settings Panel
-Go to settings Reference for settings screenshots
+Go to Settings Reference for settings screenshots
+
 
 ## Installation
+
+### Community Plugins (Recommended)
+Search for **Advanced PDF Export** in **Settings → Community Plugins → Browse**, then install and enable it.
 
 ### Manual (GitHub Releases)
 1. Go to the [Releases](https://github.com/ShrekBytes/advanced-pdf-export/releases) page.
@@ -69,7 +72,8 @@ Go to settings Reference for settings screenshots
 
 ## Settings Reference
 
-All settings take effect after closing the settin.
+All settings take effect after closing the settings panel.
+
 <img src="screenshots/settings1.png" width="75%" />
 <img src="screenshots/settings2.png" width="75%" />
 <img src="screenshots/settings3.png" width="75%" />
@@ -93,12 +97,13 @@ All settings take effect after closing the settin.
 |---|---|
 | Font family | Georgia, Times New Roman, Palatino, Arial, Helvetica, Trebuchet, Courier New |
 | Font size | 10 – 16 px |
+| Code font size | 0.75em – 1.00em |
 | Line height | Tight (1.4) → Double (2.0) |
 | Paragraph spacing | None → Wide (1em) |
 | Heading scale | 0.8× → 1.2× multiplier applied to all heading sizes |
 
 ### Colors
-Accent · Body text · Headings · Blockquote border · Table header background · Code background
+Accent · Body text · Headings · Blockquote background · Blockquote border · Table header background · Code background
 
 ### Heading Style
 | Setting | Description |
