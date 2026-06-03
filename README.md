@@ -39,10 +39,7 @@ Type `///` on its own line, or click the **Insert Page Break** button in the too
 ![Modern preset](screenshots/style3.png)
 
 ### Settings Panel
-<img src="screenshots/settings1.png" width="75%" />
-<img src="screenshots/settings2.png" width="75%" />
-<img src="screenshots/settings3.png" width="75%" />
-<img src="screenshots/settings4.png" width="75%" />
+Go to settings Reference for settings screenshots
 
 ## Installation
 
@@ -72,7 +69,11 @@ Type `///` on its own line, or click the **Insert Page Break** button in the too
 
 ## Settings Reference
 
-All settings take effect immediately in the live preview.
+All settings take effect after closing the settin.
+<img src="screenshots/settings1.png" width="75%" />
+<img src="screenshots/settings2.png" width="75%" />
+<img src="screenshots/settings3.png" width="75%" />
+<img src="screenshots/settings4.png" width="75%" />
 
 ### Style Preset
 | Setting | Description |
