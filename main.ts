@@ -1475,14 +1475,14 @@ class PDFExportModal extends Modal {
         ? `<div style="position:absolute;bottom:0;left:0;right:0;height:${footerH}px;display:flex;align-items:center;border-top:0.5px solid ${exportAccent}33;padding:0 ${mLeft}px;font-size:9px;color:#aaa;font-family:${fontFamily};">${footerInnerHTML}</div>`
         : "";
 
-      const contentDivHTML = `<div class="mpdf-doc" style="position:absolute;top:${mTop + headerH}px;left:${mLeft}px;width:${contentW}px;height:${contentH}px;overflow:hidden;">${contentHTML}</div>`;
+      const contentDivHTML = `<div class="mpdf-doc" style="position:absolute;top:${mTop + headerH}px;left:${mLeft}px;width:${contentW}px;">${contentHTML}</div>`;
 
       return `<div class="mpdf-export-page">${headerHTML}${contentDivHTML}${footerHTML}</div>`;
     });
 
     const printCSS = `
       *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-      @page { size: ${s.pageSize} ${s.orientation}; margin: 0; }
+      @page { size: ${pw}px ${ph}px; margin: 0; }
       html, body { margin: 0; padding: 0; background: #fff; }
       .mpdf-export-page {
         position: relative;
