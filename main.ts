@@ -1010,7 +1010,15 @@ function buildPageLayouts(allPages: HTMLElement[][], s: PDFExportSettings): Page
     const displayNum = s.showHeaderFooterOnFirstPage
       ? s.pageNumberStart + i
       : s.pageNumberStart + (i - 1);
-    const numStr = `${displayNum} / ${totalPages}`;
+
+    // The displayed total is the number that will appear on the last page,
+    // so it shifts by the same offset as displayNum.
+    //   enabled:  last index = totalPages-1  → pageNumberStart + totalPages - 1
+    //   disabled: last index = totalPages-1, but offset is (i-1) → pageNumberStart + totalPages - 2
+    const displayTotal = s.showHeaderFooterOnFirstPage
+      ? s.pageNumberStart + totalPages - 1
+      : s.pageNumberStart + totalPages - 2;
+    const numStr = `${displayNum} / ${displayTotal}`;
 
     let footerLeft = "", footerRight = "", footerCenter = "";
     let headerLeft = "", headerCenter = "", headerRight = "";
