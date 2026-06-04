@@ -49,6 +49,7 @@ interface PDFExportSettings extends DocStyle {
   footerText: string;
   showHeader: boolean;
   showFooter: boolean;
+  showFooterBorder: boolean;
   showPageNumbers: boolean;
   pageNumberPosition: "center" | "left" | "right";
   pageNumberStart: number;
@@ -261,6 +262,7 @@ const DEFAULT_SETTINGS: PDFExportSettings = {
   footerText: "",
   showHeader: true,
   showFooter: true,
+  showFooterBorder: true,
   showPageNumbers: true,
   pageNumberPosition: "right",
   pageNumberStart: 1,
@@ -1660,9 +1662,9 @@ class PDFExportModal extends Modal {
         footer.style.cssText = [
           "position:absolute", "bottom:0", "left:0", "right:0",
           `height:${footerH}px`, "display:flex", "align-items:center",
-          `border-top:0.5px solid ${accentColor}33`,
+          s.showFooterBorder ? `border-top:0.5px solid ${accentColor}33` : "",
           `padding:0 ${mLeft}px`, "font-size:9px", "color:#aaa", `font-family:${fontFamily}`,
-        ].join(";");
+        ].filter(Boolean).join(";");
 
         if (layout.footerCenter) {
           const span = document.createElement("span");
@@ -1750,8 +1752,9 @@ class PDFExportModal extends Modal {
         : `<span>${escapeHTML(layout.footerLeft)}</span><span style="margin-left:auto;">${escapeHTML(layout.footerRight)}</span>`;
 
       const hasExportFooter = s.showFooter && (layout.footerLeft || layout.footerRight || layout.footerCenter);
+      const footerBorder = s.showFooterBorder ? `border-top:0.5px solid ${exportAccent}33;` : "";
       const footerHTML = hasExportFooter
-        ? `<div style="position:absolute;bottom:0;left:0;right:0;height:${footerH}px;display:flex;align-items:center;border-top:0.5px solid ${exportAccent}33;padding:0 ${mLeft}px;font-size:9px;color:#aaa;font-family:${fontFamily};">${footerInnerHTML}</div>`
+        ? `<div style="position:absolute;bottom:0;left:0;right:0;height:${footerH}px;display:flex;align-items:center;${footerBorder}padding:0 ${mLeft}px;font-size:9px;color:#aaa;font-family:${fontFamily};">${footerInnerHTML}</div>`
         : "";
 
       const contentDivHTML = `<div class="mpdf-doc" style="position:absolute;top:${mTop + headerH}px;left:${mLeft}px;width:${contentW}px;">${contentHTML}</div>`;
@@ -2080,6 +2083,9 @@ class PDFExportSettingTab extends PluginSettingTab {
     );
     new Setting(containerEl).setName("Show footer").addToggle((t) =>
       t.setValue(s.showFooter).onChange(async (v) => { s.showFooter = v; await this.markDirty(); }),
+    );
+    new Setting(containerEl).setName("Footer border").setDesc("Show the separator line above the footer.").addToggle((t) =>
+      t.setValue(s.showFooterBorder).onChange(async (v) => { s.showFooterBorder = v; await this.markDirty(); }),
     );
     new Setting(containerEl)
       .setName("Footer text")
