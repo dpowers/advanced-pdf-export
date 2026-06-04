@@ -1641,7 +1641,7 @@ class PDFExportModal extends Modal {
       contentDiv.className = "mpdf-doc";
       contentDiv.style.cssText = [
         "position:absolute", `top:${mTop + headerH}px`, `left:${mLeft}px`,
-        `width:${contentW}px`, `height:${contentH}px`, "overflow:hidden",
+        `width:${contentW}px`,
       ].join(";");
       for (const node of layout.pageNodes) contentDiv.appendChild(node.cloneNode(true));
       shadow.appendChild(contentDiv);
