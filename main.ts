@@ -260,7 +260,7 @@ const DEFAULT_SETTINGS: PDFExportSettings = {
   footerText: "",
   showHeader: true,
   showFooter: true,
-  showFooterBorder: true,
+  showFooterBorder: false,
   showPageNumbers: true,
   pageNumberPosition: "right",
   pageNumberStart: 1,
@@ -271,7 +271,7 @@ const DEFAULT_SETTINGS: PDFExportSettings = {
   autoBreakH1: false,
   autoBreakH2: false,
   includeFilenameAsTitle: false,
-  previewScale: 0.62,
+  previewScale: 0.90,
 };
 
 // ─── Utilities ────────────────────────────────────────────────────────────────
