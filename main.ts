@@ -1651,7 +1651,11 @@ class PDFExportModal extends Modal {
       });
 
       // ── Footer ───────────────────────────────────────────────────────────────
-      if (s.showFooter) {
+      // Guard against rendering an empty footer div (and its border-top) when
+      // all footer fields are blank — which is exactly the state produced for
+      // page 1 when showHeaderFooterOnFirstPage is disabled.
+      const hasFooter = s.showFooter && (layout.footerLeft || layout.footerRight || layout.footerCenter);
+      if (hasFooter) {
         const footer = document.createElement("div");
         footer.style.cssText = [
           "position:absolute", "bottom:0", "left:0", "right:0",
@@ -1745,7 +1749,8 @@ class PDFExportModal extends Modal {
         ? `<span style="flex:1;text-align:center;">${escapeHTML(layout.footerCenter)}</span>`
         : `<span>${escapeHTML(layout.footerLeft)}</span><span style="margin-left:auto;">${escapeHTML(layout.footerRight)}</span>`;
 
-      const footerHTML = s.showFooter
+      const hasExportFooter = s.showFooter && (layout.footerLeft || layout.footerRight || layout.footerCenter);
+      const footerHTML = hasExportFooter
         ? `<div style="position:absolute;bottom:0;left:0;right:0;height:${footerH}px;display:flex;align-items:center;border-top:0.5px solid ${exportAccent}33;padding:0 ${mLeft}px;font-size:9px;color:#aaa;font-family:${fontFamily};">${footerInnerHTML}</div>`
         : "";
 
