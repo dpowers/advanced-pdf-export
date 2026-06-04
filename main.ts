@@ -34,6 +34,7 @@ interface DocStyle {
   codeFontSize: number;
   tableHeaderBg: string;
   tableStriped: boolean;
+  pageBackground: string; // page/paper background colour (white for light, dark for dark-mode)
   marginTop: number;    // mm
   marginBottom: number; // mm
   marginLeft: number;   // mm
@@ -72,6 +73,7 @@ interface LayoutCache {
   docCSS: string;
   fontFamily: string;
   accentColor: string;
+  pageBackground: string;
 }
 
 interface PageLayout {
@@ -106,6 +108,7 @@ const PRESETS: Record<string, DocStyle> = {
     codeFontSize: 0.85,
     tableHeaderBg: "#f0f0f8",
     tableStriped: true,
+    pageBackground: "#ffffff",
     marginTop: 20, marginBottom: 20, marginLeft: 25, marginRight: 25,
   },
   minimal: {
@@ -127,6 +130,7 @@ const PRESETS: Record<string, DocStyle> = {
     codeFontSize: 0.82,
     tableHeaderBg: "#efefef",
     tableStriped: false,
+    pageBackground: "#ffffff",
     marginTop: 16, marginBottom: 16, marginLeft: 20, marginRight: 20,
   },
   academic: {
@@ -148,6 +152,7 @@ const PRESETS: Record<string, DocStyle> = {
     codeFontSize: 0.88,
     tableHeaderBg: "#e8e8e8",
     tableStriped: false,
+    pageBackground: "#ffffff",
     marginTop: 25, marginBottom: 25, marginLeft: 30, marginRight: 30,
   },
   colorful: {
@@ -169,6 +174,7 @@ const PRESETS: Record<string, DocStyle> = {
     codeFontSize: 0.85,
     tableHeaderBg: "#2d0a4e",
     tableStriped: true,
+    pageBackground: "#ffffff",
     marginTop: 20, marginBottom: 20, marginLeft: 25, marginRight: 25,
   },
   modern: {
@@ -190,6 +196,7 @@ const PRESETS: Record<string, DocStyle> = {
     codeFontSize: 0.85,
     tableHeaderBg: "#0070f3",
     tableStriped: true,
+    pageBackground: "#ffffff",
     marginTop: 20, marginBottom: 20, marginLeft: 25, marginRight: 25,
   },
   newspaper: {
@@ -211,7 +218,30 @@ const PRESETS: Record<string, DocStyle> = {
     codeFontSize: 0.82,
     tableHeaderBg: "#111",
     tableStriped: false,
+    pageBackground: "#ffffff",
     marginTop: 18, marginBottom: 18, marginLeft: 20, marginRight: 20,
+  },
+  dark: {
+    name: "Dark",
+    fontFamily: "Georgia, serif",
+    fontSize: 13,
+    lineHeight: 1.85,
+    paragraphSpacing: 0.65,
+    headingScale: 1.0,
+    accentColor: "#818cf8",
+    bodyColor: "#d1d5db",
+    headingColor: "#f1f5f9",
+    h1BorderBottom: false,
+    h2BorderBottom: true,
+    centerH1: false,
+    blockquoteBg: "#1e293b",
+    blockquoteBorderColor: "#818cf8",
+    codeBackground: "#0f172a",
+    codeFontSize: 0.85,
+    tableHeaderBg: "#1e293b",
+    tableStriped: true,
+    pageBackground: "#111827",
+    marginTop: 20, marginBottom: 20, marginLeft: 25, marginRight: 25,
   },
 };
 
@@ -249,11 +279,10 @@ function escapeHTML(s: string): string {
 
 function normalizeMarkdown(raw: string): string {
   return raw
-    .replace(/\r\n/g, "\n")
-    // Strip entire Obsidian callout blocks: the `[!TYPE]` header line and all
-    // subsequent `>` body lines. Without the body group only the header was
-    // removed, leaving body lines to render as orphaned blockquotes.
-    .replace(/^>\s*\[\![^\]]+\].*(?:\n|$)(?:>.*(?:\n|$))*/gm, "");
+    .replace(/\r\n/g, "\n");
+  // Callout blocks (> [!TYPE] …) are intentionally left intact so that
+  // Obsidian's MarkdownRenderer can convert them to .callout HTML elements,
+  // which the plugin then styles distinctly via buildDocCSS.
 }
 
 function splitMarkdownSections(md: string): string[] {
@@ -329,6 +358,18 @@ function postProcessRenderedHTML(root: HTMLElement): void {
   // Removing the nodes here ensures they never reach the paginator, the
   // preview DOM, or the exported PDF HTML — regardless of CSS.
   root.querySelectorAll(".copy-code-button").forEach((el) => el.remove());
+
+  // ── Pass 4: normalise callout blocks ─────────────────────────────────────
+  // Obsidian renders > [!TYPE] as .callout divs with fold controls and
+  // interactive collapse behaviour. For preview/PDF we:
+  //   • Force-expand every callout so no content is hidden in the output.
+  //   • Remove the fold-arrow button (meaningless in a static document).
+  //   • Strip the .is-collapsed class so CSS transitions don't hide content.
+  root.querySelectorAll<HTMLElement>(".callout").forEach((callout) => {
+    callout.removeAttribute("data-callout-fold");
+    callout.classList.remove("is-collapsed");
+    callout.querySelectorAll(".callout-fold").forEach((el) => el.remove());
+  });
 }
 
 // ─── CSS generator ────────────────────────────────────────────────────────────
@@ -461,6 +502,72 @@ function buildDocCSS(s: PDFExportSettings): string {
   }
   .mpdf-doc td { padding: 5px 10px; border: 0.5px solid ${s.bodyColor}22; vertical-align: top; }
   ${s.tableStriped ? `.mpdf-doc tbody tr:nth-child(even) { background: ${s.tableHeaderBg}55; }` : ""}
+
+  /* ── Callouts ────────────────────────────────────────────────────────────
+   * Obsidian renders > [!TYPE] blocks as .callout divs. We override all
+   * theme-provided callout styles with !important so the PDF and the preview
+   * both look identical regardless of which Obsidian theme is active.
+   * The design is deliberately bolder than a plain blockquote: coloured
+   * header bar, tinted body background, and ALL-CAPS type label.        */
+  .mpdf-doc .callout {
+    border-left: 4px solid ${s.accentColor} !important;
+    border-radius: 0 5px 5px 0 !important;
+    background: ${s.accentColor}12 !important;
+    margin: ${s.paragraphSpacing * 1.2}em 0 !important;
+    padding: 0 !important;
+    overflow: hidden !important;
+    box-shadow: inset 0 0 0 1px ${s.accentColor}22 !important;
+    font-style: normal !important;
+  }
+  .mpdf-doc .callout-title {
+    display: flex !important;
+    align-items: center !important;
+    gap: 7px !important;
+    padding: 7px 12px !important;
+    background: ${s.accentColor}28 !important;
+    border-bottom: 1px solid ${s.accentColor}33 !important;
+    font-family: ${s.fontFamily} !important;
+    font-size: 0.8em !important;
+    font-weight: 800 !important;
+    font-style: normal !important;
+    letter-spacing: 0.08em !important;
+    text-transform: uppercase !important;
+    color: ${s.accentColor} !important;
+    line-height: 1.3 !important;
+  }
+  .mpdf-doc .callout-icon {
+    display: inline-flex !important;
+    align-items: center !important;
+    flex-shrink: 0 !important;
+    width: 15px !important;
+    height: 15px !important;
+    color: ${s.accentColor} !important;
+  }
+  .mpdf-doc .callout-icon svg {
+    width: 15px !important;
+    height: 15px !important;
+    stroke: ${s.accentColor} !important;
+    fill: none !important;
+    stroke-width: 2 !important;
+  }
+  .mpdf-doc .callout-title-inner {
+    flex: 1 !important;
+    min-width: 0 !important;
+  }
+  .mpdf-doc .callout-fold { display: none !important; }
+  .mpdf-doc .callout-content {
+    padding: 9px 14px !important;
+    color: ${s.bodyColor} !important;
+    font-style: normal !important;
+    background: transparent !important;
+  }
+  .mpdf-doc .callout-content > p:first-child { margin-top: 0 !important; }
+  .mpdf-doc .callout-content > p:last-child  { margin-bottom: 0 !important; }
+  /* Nested blockquotes inside callout content keep a subtler indent */
+  .mpdf-doc .callout-content blockquote {
+    border-left-color: ${s.accentColor}66 !important;
+    background: transparent !important;
+  }
   `.trim();
 }
 
@@ -1333,7 +1440,7 @@ class PDFExportModal extends Modal {
     }
 
     const layouts = buildPageLayouts(allPages, s);
-    this.layoutCache = { layouts, pw, ph, mTop, mLeft, footerH, headerH, contentW, contentH, docCSS, fontFamily: s.fontFamily, accentColor: s.accentColor };
+    this.layoutCache = { layouts, pw, ph, mTop, mLeft, footerH, headerH, contentW, contentH, docCSS, fontFamily: s.fontFamily, accentColor: s.accentColor, pageBackground: s.pageBackground };
 
     this.drawPreview(this.layoutCache, s.previewScale);
     this.pageCountEl.textContent = `${layouts.length} page${layouts.length !== 1 ? "s" : ""}`;
@@ -1364,24 +1471,26 @@ class PDFExportModal extends Modal {
   }
 
   private drawPreview(c: LayoutCache, scale: number) {
-    const { layouts, pw, ph, mTop, mLeft, footerH, headerH, contentW, contentH, docCSS, fontFamily, accentColor } = c;
+    const { layouts, pw, ph, mTop, mLeft, footerH, headerH, contentW, contentH, docCSS, fontFamily, accentColor, pageBackground } = c;
     const s = this.plugin.settings;
     this.previewEl.empty();
 
-    const styleEl = this.previewEl.createEl("style");
-    styleEl.textContent = docCSS;
-
-    // Build a map of heading id → page number across all pages so internal
-    // anchor tooltips can show "Go to page N", consistent with the PDF viewer.
-    const idToPage = new Map<string, number>();
-    for (const layout of layouts) {
+    // Build heading id → page-wrap map so anchor clicks can scroll to the right page.
+    // We index by page-wrap index so we can call scrollIntoView on the *wrapper*
+    // (which lives in the light DOM and is findable), not on the element inside the
+    // shadow root (which querySelector on the light tree cannot reach).
+    const idToWrapIndex = new Map<string, number>();
+    layouts.forEach((layout, i) => {
       for (const node of layout.pageNodes) {
         node.querySelectorAll("[id]").forEach((el) => {
-          if (!idToPage.has(el.id)) idToPage.set(el.id, layout.pageNum);
+          if (!idToWrapIndex.has(el.id)) idToWrapIndex.set(el.id, i);
         });
-        if (node.id && !idToPage.has(node.id)) idToPage.set(node.id, layout.pageNum);
+        if (node.id && !idToWrapIndex.has(node.id)) idToWrapIndex.set(node.id, i);
       }
-    }
+    });
+
+    // Keep references to the page-wrap elements so anchor clicks can find them.
+    const pageWraps: HTMLElement[] = [];
 
     for (const layout of layouts) {
       const scaledW = Math.round(pw * scale);
@@ -1390,48 +1499,86 @@ class PDFExportModal extends Modal {
       const wrap = this.previewEl.createEl("div", { cls: "mpdf-page-wrap" });
       wrap.style.cssText = `width:${scaledW}px;height:${scaledH}px;position:relative;flex-shrink:0;`;
       wrap.createEl("div", { cls: "mpdf-page-label", text: `Page ${layout.pageNum} of ${layout.totalPages}` });
+      pageWraps.push(wrap);
 
       const scaleWrap = wrap.createEl("div", { cls: "mpdf-page-scale" });
       scaleWrap.style.cssText = `width:${scaledW}px;height:${scaledH}px;overflow:hidden;position:relative;`;
 
-      const page = scaleWrap.createEl("div", { cls: "mpdf-page" });
-      page.style.cssText = [
+      // ── Shadow host ──────────────────────────────────────────────────────────
+      // Each page is rendered inside a shadow root so that Obsidian's theme CSS
+      // is physically prevented from reaching the page content. External CSS
+      // cannot cross the shadow boundary — only explicitly inherited CSS custom
+      // properties can, and our generated CSS uses no variables at all, only
+      // fully-resolved values from the active preset. The shadow host takes the
+      // place of the old .mpdf-page div; its box-shadow and background are now
+      // declared inside the :host rule within the shadow stylesheet.
+      const shadowHost = document.createElement("div");
+      shadowHost.style.cssText = [
         `width:${pw}px`, `height:${ph}px`,
         `transform:scale(${scale})`, "transform-origin:top left",
-        "position:absolute", "top:0", "left:0", "background:#fff",
+        "position:absolute", "top:0", "left:0",
       ].join(";");
+      scaleWrap.appendChild(shadowHost);
 
+      const shadow = shadowHost.attachShadow({ mode: "open" });
+
+      // Scoped stylesheet: :host supplies the page background, shadow and
+      // box-model reset; the rest is the same docCSS used by the PDF export.
+      const styleEl = document.createElement("style");
+      styleEl.textContent = `
+        :host {
+          display: block;
+          width: ${pw}px;
+          height: ${ph}px;
+          background: ${pageBackground};
+          box-shadow: 0 2px 8px rgba(0,0,0,.30), 0 8px 32px rgba(0,0,0,.25);
+          overflow: hidden;
+          position: relative;
+          box-sizing: border-box;
+        }
+        *, *::before, *::after { box-sizing: border-box; }
+        ${docCSS}
+      `;
+      shadow.appendChild(styleEl);
+
+      // ── Header ───────────────────────────────────────────────────────────────
       if (s.showHeader && layout.headerText) {
-        const hdr = page.createEl("div");
+        const hdr = document.createElement("div");
         hdr.textContent = layout.headerText;
         hdr.style.cssText = [
           "position:absolute", `top:${mTop * 0.4}px`, `right:${mLeft}px`,
           "font-size:9px", "color:#999", `font-family:${fontFamily}`, "white-space:nowrap",
         ].join(";");
+        shadow.appendChild(hdr);
       }
 
-      const contentDiv = page.createEl("div", { cls: "mpdf-doc" });
+      // ── Content ──────────────────────────────────────────────────────────────
+      const contentDiv = document.createElement("div");
+      contentDiv.className = "mpdf-doc";
       contentDiv.style.cssText = [
         "position:absolute", `top:${mTop + headerH}px`, `left:${mLeft}px`,
         `width:${contentW}px`, `height:${contentH}px`, "overflow:hidden",
       ].join(";");
       for (const node of layout.pageNodes) contentDiv.appendChild(node.cloneNode(true));
+      shadow.appendChild(contentDiv);
 
-      // Wire internal anchor links: scroll preview to the target heading,
-      // and show "Go to page N" tooltip — consistent with the PDF viewer.
+      // Wire internal anchor links. Because content is inside a shadow root,
+      // we scroll the *page-wrap* (light DOM) into view instead of the element.
       contentDiv.querySelectorAll<HTMLAnchorElement>("a[href^='#']").forEach((a) => {
         const targetId = decodeURIComponent(a.getAttribute("href")!.slice(1));
-        const pageNum  = idToPage.get(targetId);
-        if (pageNum) a.title = `Go to page ${pageNum}`;
-        a.addEventListener("click", (e) => {
-          e.preventDefault();
-          const target = this.previewEl.querySelector<HTMLElement>(`#${CSS.escape(targetId)}`);
-          if (target) target.scrollIntoView({ behavior: "smooth", block: "start" });
-        });
+        const wrapIdx  = idToWrapIndex.get(targetId);
+        if (wrapIdx !== undefined) {
+          a.title = `Go to page ${wrapIdx + 1}`;
+          a.addEventListener("click", (e) => {
+            e.preventDefault();
+            pageWraps[wrapIdx]?.scrollIntoView({ behavior: "smooth", block: "start" });
+          });
+        }
       });
 
+      // ── Footer ───────────────────────────────────────────────────────────────
       if (s.showFooter) {
-        const footer = page.createEl("div");
+        const footer = document.createElement("div");
         footer.style.cssText = [
           "position:absolute", "bottom:0", "left:0", "right:0",
           `height:${footerH}px`, "display:flex", "align-items:center",
@@ -1440,15 +1587,20 @@ class PDFExportModal extends Modal {
         ].join(";");
 
         if (layout.footerCenter) {
-          const span = footer.createEl("span");
+          const span = document.createElement("span");
           span.style.cssText = "flex:1;text-align:center;";
           span.textContent = layout.footerCenter;
+          footer.appendChild(span);
         } else {
-          footer.createEl("span").textContent = layout.footerLeft;
-          const right = footer.createEl("span");
+          const left = document.createElement("span");
+          left.textContent = layout.footerLeft;
+          footer.appendChild(left);
+          const right = document.createElement("span");
           right.style.marginLeft = "auto";
           right.textContent = layout.footerRight;
+          footer.appendChild(right);
         }
+        shadow.appendChild(footer);
       }
     }
   }
@@ -1502,7 +1654,7 @@ class PDFExportModal extends Modal {
       return;
     }
 
-    const { layouts, pw, ph, mTop, mLeft, footerH, headerH, contentW, docCSS, fontFamily, accentColor: exportAccent } = cache;
+    const { layouts, pw, ph, mTop, mLeft, footerH, headerH, contentW, docCSS, fontFamily, accentColor: exportAccent, pageBackground } = cache;
 
     const pageHTMLParts = layouts.map((layout) => {
       const contentHTML = layout.pageNodes.map((n) => n.outerHTML).join("\n");
@@ -1527,11 +1679,12 @@ class PDFExportModal extends Modal {
     const printCSS = `
       *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
       @page { size: ${pw}px ${ph}px; margin: 0; }
-      html, body { margin: 0; padding: 0; background: #fff; }
+      html, body { margin: 0; padding: 0; background: ${pageBackground}; }
       .mpdf-export-page {
         position: relative;
         width: ${pw}px; height: ${ph}px;
         overflow: hidden;
+        background: ${pageBackground};
         page-break-after: always; break-after: page;
       }
       .mpdf-export-page:last-child { page-break-after: avoid; break-after: avoid; }
@@ -1789,6 +1942,7 @@ class PDFExportSettingTab extends PluginSettingTab {
     colorSetting("Accent color",            "accentColor");
     colorSetting("Body text color",         "bodyColor");
     colorSetting("Heading color",           "headingColor");
+    colorSetting("Page background",         "pageBackground");
     colorSetting("Blockquote background",   "blockquoteBg");
     colorSetting("Blockquote border",       "blockquoteBorderColor");
     colorSetting("Table header background", "tableHeaderBg");
