@@ -624,7 +624,12 @@ const UNSPLITTABLE_TAGS = new Set([
   "CODE", "IMG", "HR", "H1", "H2", "H3", "H4", "H5", "H6",
 ]);
 
-const HEIGHT_EPS = 0.5; // px — prevents infinite loops on rounding boundaries
+// Increased from 0.5 to 2px: the paginator measures in a light-DOM sandbox
+// while the preview renders inside shadow DOM. A larger epsilon absorbs the
+// fractional sub-pixel rendering differences between the two contexts, so a
+// page that measures as "just fitting" in the sandbox also fits visually in
+// the shadow root without the last line being clipped.
+const HEIGHT_EPS = 2; // px
 
 function measureNodesHeight(nodes: HTMLElement[], measureEl: HTMLElement): number {
   measureEl.innerHTML = "";
@@ -1639,6 +1644,14 @@ class PDFExportModal extends Modal {
       // ── Content ──────────────────────────────────────────────────────────────
       const contentDiv = document.createElement("div");
       contentDiv.className = "mpdf-doc";
+      // No height or overflow:hidden here — the shadow :host already clips at
+      // the full page boundary (ph px). Adding a second clip at contentH caused
+      // the last line(s) to vanish in preview: the paginator measures nodes in
+      // a light-DOM sandbox while the preview renders in shadow DOM, and subtle
+      // sub-pixel differences between the two contexts meant content that
+      // measured as fitting could render fractionally taller and get clipped.
+      // The export path never set height/overflow on this div, which is why
+      // the same content appeared correctly in the exported PDF.
       contentDiv.style.cssText = [
         "position:absolute", `top:${mTop + headerH}px`, `left:${mLeft}px`,
         `width:${contentW}px`,
