@@ -34,7 +34,7 @@ interface DocStyle {
   codeFontSize: number;
   tableHeaderBg: string;
   tableStriped: boolean;
-  pageBackground: string; // page/paper background colour (white for light, dark for dark-mode)
+  pageBackground: string;
   marginTop: number;    // mm
   marginBottom: number; // mm
   marginLeft: number;   // mm
@@ -63,9 +63,7 @@ interface PDFExportSettings extends DocStyle {
   previewScale: number;
 }
 
-// Typed layout cache — avoids re-paginating on zoom-only changes.
-// fontFamily and accentColor are cached so zoom redraws stay consistent
-// with the paginated body even if settings are changed in the interim.
+// Cached layout — lets zoom changes redraw without re-paginating.
 interface LayoutCache {
   layouts: PageLayout[];
   pw: number;
@@ -262,7 +260,7 @@ const DEFAULT_SETTINGS: PDFExportSettings = {
   footerText: "",
   showHeader: true,
   showFooter: true,
-  showFooterBorder: false,
+  showFooterBorder: true,
   showPageNumbers: true,
   pageNumberPosition: "right",
   pageNumberStart: 1,
@@ -273,7 +271,7 @@ const DEFAULT_SETTINGS: PDFExportSettings = {
   autoBreakH1: false,
   autoBreakH2: false,
   includeFilenameAsTitle: false,
-  previewScale: 1.00,
+  previewScale: 0.62,
 };
 
 // ─── Utilities ────────────────────────────────────────────────────────────────
@@ -292,20 +290,10 @@ function escapeHTML(s: string): string {
 // ─── Markdown helpers ─────────────────────────────────────────────────────────
 
 function normalizeMarkdown(raw: string): string {
-  return raw
-    .replace(/\r\n/g, "\n");
-  // Callout blocks (> [!TYPE] …) are intentionally left intact so that
-  // Obsidian's MarkdownRenderer can convert them to .callout HTML elements,
-  // which the plugin then styles distinctly via buildDocCSS.
+  return raw.replace(/\r\n/g, "\n");
 }
 
-/**
- * Strips a YAML frontmatter block from the start of a markdown document.
- * Matches the opening `---`, any content, and the closing `---` (with
- * optional trailing whitespace on the fence lines), so it handles both
- * Unix and Windows line endings. If no frontmatter is present the string
- * is returned unchanged.
- */
+/** Strips an opening YAML frontmatter block (--- … ---); returns the string unchanged if none is found. */
 function stripFrontmatter(md: string): string {
   return md.replace(/^---[ \t]*\r?\n[\s\S]*?\r?\n---[ \t]*(\r?\n|$)/, "");
 }
@@ -329,14 +317,6 @@ async function renderMarkdownToHtml(
   return temp.innerHTML;
 }
 
-/**
- * Converts a heading's text content into a URL-fragment-safe slug,
- * matching the algorithm used by most Markdown renderers:
- *   - lowercase
- *   - strip everything except letters, digits, spaces, and hyphens
- *   - replace spaces with hyphens
- *   - collapse consecutive hyphens
- */
 function slugifyHeading(text: string): string {
   return text
     .toLowerCase()
@@ -346,50 +326,30 @@ function slugifyHeading(text: string): string {
     .replace(/-+/g, "-");
 }
 
-/**
- * Post-processing passes over Obsidian's rendered HTML:
- *
- * 1. Assigns `id` attributes to all h1–h6 so `#fragment` links have targets.
- * 2. Strips the `external-link` class from <a> elements so Obsidian's theme
- *    CSS never gets a chance to inject the ↗ icon (works even when the theme
- *    rule has higher specificity than our own `.mpdf-doc` scoped rule).
- * 3. Removes copy-code buttons that Obsidian injects into every fenced code
- *    block — they are interactive UI widgets that have no place in a PDF or
- *    a read-only print preview.
- */
+// Cleans up Obsidian-specific artifacts from rendered HTML before paginating:
+// heading IDs for anchor links, external-link icon removal, copy-code button
+// removal, and callout force-expand.
 function postProcessRenderedHTML(root: HTMLElement): void {
-  // ── Pass 1: assign heading IDs ────────────────────────────────────────────
+  // Heading IDs
   const seen = new Map<string, number>();
-
   root.querySelectorAll("h1,h2,h3,h4,h5,h6").forEach((el) => {
     const text = el.textContent || "";
     const base = slugifyHeading(text);
     if (!base) return;
     const count = seen.get(base) ?? 0;
     seen.set(base, count + 1);
-    const id = count === 0 ? base : `${base}-${count}`;
-    el.id = id;
+    el.id = count === 0 ? base : `${base}-${count}`;
   });
 
-  // ── Pass 2: fix all anchor elements ──────────────────────────────────────
+  // Strip Obsidian's external-link class (triggers a ↗ icon via theme CSS).
   root.querySelectorAll<HTMLAnchorElement>("a").forEach((a) => {
-    // Remove the Obsidian-added class that triggers the external link icon.
-    // This is the only reliable way to beat the theme's unscoped CSS rule.
     a.classList.remove("external-link");
   });
 
-  // ── Pass 3: strip copy-code buttons ──────────────────────────────────────
-  // Obsidian injects a .copy-code-button into every rendered <pre> block.
-  // Removing the nodes here ensures they never reach the paginator, the
-  // preview DOM, or the exported PDF HTML — regardless of CSS.
+  // Remove copy-code buttons — meaningless in a static PDF.
   root.querySelectorAll(".copy-code-button").forEach((el) => el.remove());
 
-  // ── Pass 4: normalise callout blocks ─────────────────────────────────────
-  // Obsidian renders > [!TYPE] as .callout divs with fold controls and
-  // interactive collapse behaviour. For preview/PDF we:
-  //   • Force-expand every callout so no content is hidden in the output.
-  //   • Remove the fold-arrow button (meaningless in a static document).
-  //   • Strip the .is-collapsed class so CSS transitions don't hide content.
+  // Force-expand callouts: remove fold controls and collapsed state.
   root.querySelectorAll<HTMLElement>(".callout").forEach((callout) => {
     callout.removeAttribute("data-callout-fold");
     callout.classList.remove("is-collapsed");
@@ -398,16 +358,8 @@ function postProcessRenderedHTML(root: HTMLElement): void {
 }
 
 // ─── CSS generator ────────────────────────────────────────────────────────────
-//
-// Single source of truth used by both the live preview and the exported PDF.
-// The selector is always `.mpdf-doc` so both pipelines get identical styles.
 
-/**
- * Returns the relative luminance (0–1) of a CSS hex color (#rrggbb or #rgb).
- * Used to pick readable table-header text regardless of which preset or custom
- * color is active.  Non-hex values (e.g. named colors) return 1 (treat as
- * light) so we fall back to the heading color rather than forcing white.
- */
+/** Returns relative luminance (0–1) of a CSS hex color; non-hex values return 1 (treat as light). */
 function hexLuminance(hex: string): number {
   const full = hex.replace(
     /^#([\da-f])([\da-f])([\da-f])$/i,
@@ -424,13 +376,9 @@ function hexLuminance(hex: string): number {
 
 function buildDocCSS(s: PDFExportSettings): string {
   const hs = s.headingScale;
-  // Resolve custom font: when "__custom__" is selected use customFontName,
-  // otherwise use the preset's font stack directly.
   const fontFamily = s.fontFamily === "__custom__"
     ? (s.customFontName.trim() || "inherit")
     : s.fontFamily;
-  // Choose white or heading-colour text based on the actual background
-  // luminance, so customised colours work correctly regardless of preset name.
   const tableHeaderTextColor =
     hexLuminance(s.tableHeaderBg) < 0.35 ? "#fff" : s.headingColor;
 
@@ -516,9 +464,7 @@ function buildDocCSS(s: PDFExportSettings): string {
   .mpdf-doc img { max-width: 100%; height: auto; display: block; margin: ${s.paragraphSpacing}em auto; }
   .mpdf-doc a { color: ${s.accentColor}; }
   .mpdf-doc a.external-link::after { display: none !important; content: none !important; }
-  /* Belt-and-suspenders: hide any copy-code button Obsidian re-injects after
-     the DOM-removal pass in postProcessRenderedHTML (e.g. via a MutationObserver
-     or a theme that adds its own variant with different timing). */
+  /* Belt-and-suspenders: hide copy-code buttons re-injected after postProcessRenderedHTML. */
   .mpdf-doc .copy-code-button { display: none !important; }
   .mpdf-doc table { width: 100%; border-collapse: collapse; margin: 0 0 ${s.paragraphSpacing}em; font-size: 0.92em; }
   .mpdf-doc th {
@@ -533,12 +479,8 @@ function buildDocCSS(s: PDFExportSettings): string {
   .mpdf-doc td { padding: 5px 10px; border: 0.5px solid ${s.bodyColor}22; vertical-align: top; }
   ${s.tableStriped ? `.mpdf-doc tbody tr:nth-child(even) { background: ${s.tableHeaderBg}55; }` : ""}
 
-  /* ── Callouts ────────────────────────────────────────────────────────────
-   * Obsidian renders > [!TYPE] blocks as .callout divs. We override all
-   * theme-provided callout styles with !important so the PDF and the preview
-   * both look identical regardless of which Obsidian theme is active.
-   * The design is deliberately bolder than a plain blockquote: coloured
-   * header bar, tinted body background, and ALL-CAPS type label.        */
+  /* Callouts — override theme styles with !important so preview and PDF are
+   * identical regardless of the active Obsidian theme. */
   .mpdf-doc .callout {
     border-left: 4px solid ${s.accentColor} !important;
     border-radius: 0 5px 5px 0 !important;
@@ -602,12 +544,9 @@ function buildDocCSS(s: PDFExportSettings): string {
 }
 
 // ─── Paginator ────────────────────────────────────────────────────────────────
-//
-// Attaches a hidden sandbox to document.body (never to a scrollable container)
-// so height measurements are unaffected by scroll context or overflow clipping.
-// Walks the block-level children of the rendered HTML and fills page buckets
-// by measured height. Elements that overflow are split by their natural unit
-// (line for PRE, row for TABLE, item for UL/OL, word for inline text).
+// Measures block children of the rendered HTML in a hidden off-screen sandbox
+// and distributes them into page buckets. Oversized elements are split by their
+// natural unit (line for PRE, row for TABLE, item for UL/OL, word for text).
 
 const INLINE_SPLIT_TAGS = new Set(["P", "LI", "BLOCKQUOTE", "TD", "TH"]);
 
@@ -618,17 +557,13 @@ const BLOCK_TAGS = new Set([
   "H1", "H2", "H3", "H4", "H5", "H6",
 ]);
 
-// Elements that cannot be split at all — they land on one page whole.
-// PRE is deliberately absent: it gets its own line-based splitter below.
+// PRE is absent — it gets its own line-based splitter.
 const UNSPLITTABLE_TAGS = new Set([
   "CODE", "IMG", "HR", "H1", "H2", "H3", "H4", "H5", "H6",
 ]);
 
-// Increased from 0.5 to 2px: the paginator measures in a light-DOM sandbox
-// while the preview renders inside shadow DOM. A larger epsilon absorbs the
-// fractional sub-pixel rendering differences between the two contexts, so a
-// page that measures as "just fitting" in the sandbox also fits visually in
-// the shadow root without the last line being clipped.
+// 2px guards against sub-pixel rendering differences between the light-DOM
+// paginator sandbox and the shadow DOM preview context.
 const HEIGHT_EPS = 2; // px
 
 function measureNodesHeight(nodes: HTMLElement[], measureEl: HTMLElement): number {
@@ -747,8 +682,7 @@ function splitInlineElement(
 
 function buildListWithItems(listEl: HTMLElement, items: HTMLElement[], startAt?: number): HTMLElement {
   const clone = listEl.cloneNode(false) as HTMLElement;
-  // For ordered lists, set the correct start value so numbering continues
-  // across page breaks instead of restarting at 1.
+  // Preserve OL numbering across page breaks.
   if (listEl.tagName === "OL" && startAt !== undefined && startAt > 1) {
     (clone as HTMLOListElement).start = startAt;
   }
@@ -766,7 +700,7 @@ function splitListElement(
   ) as HTMLElement[];
   if (items.length === 0) return null;
 
-  // For OL, respect an existing start attribute (e.g. already a continuation).
+  // Respect an existing start attribute on continuation fragments.
   const existingStart = listEl.tagName === "OL"
     ? ((listEl as HTMLOListElement).start ?? 1)
     : 1;
@@ -837,11 +771,7 @@ function splitTableElement(
 }
 
 // ── PRE splitter ─────────────────────────────────────────────────────────────
-//
-// Splits a <pre><code>…</code></pre> block by lines, preserving the inner
-// <code> wrapper so CSS styling (background, font, colour) stays correct.
-// When forced (alone on an empty page), guarantees at least 1 line moves
-// forward so the main loop can never stall on an oversized code block.
+// Splits by lines, preserving the inner <code> wrapper for correct styling.
 
 function buildPreWithLines(preEl: HTMLElement, lines: string[]): HTMLElement {
   const clone = preEl.cloneNode(false) as HTMLElement;
@@ -998,28 +928,17 @@ function paginateHTML(
 }
 
 // ─── Page layout builder ──────────────────────────────────────────────────────
-//
-// Computes header/footer text for every page. Both the live preview and the
-// PDF export consume the same PageLayout objects so they are always in sync.
 
 function buildPageLayouts(allPages: HTMLElement[][], s: PDFExportSettings): PageLayout[] {
   const totalPages = allPages.length;
   return allPages.map((pageNodes, i) => {
     const pageNum = i + 1;
-    // When first-page header/footer is disabled, page 0 is always blank.
     const showHF = s.showHeaderFooterOnFirstPage || i > 0;
 
-    // Compute the display number.
-    //   enabled:  page index 0 → pageNumberStart,   1 → pageNumberStart+1, …
-    //   disabled: page index 1 → pageNumberStart,   2 → pageNumberStart+1, …
+    // Page number display: when first-page HF is disabled the offset shifts by 1.
     const displayNum = s.showHeaderFooterOnFirstPage
       ? s.pageNumberStart + i
       : s.pageNumberStart + (i - 1);
-
-    // The displayed total is the number that will appear on the last page,
-    // so it shifts by the same offset as displayNum.
-    //   enabled:  last index = totalPages-1  → pageNumberStart + totalPages - 1
-    //   disabled: last index = totalPages-1, but offset is (i-1) → pageNumberStart + totalPages - 2
     const displayTotal = s.showHeaderFooterOnFirstPage
       ? s.pageNumberStart + totalPages - 1
       : s.pageNumberStart + totalPages - 2;
@@ -1029,7 +948,6 @@ function buildPageLayouts(allPages: HTMLElement[][], s: PDFExportSettings): Page
     let headerLeft = "", headerCenter = "", headerRight = "";
 
     if (showHF) {
-      // ── Footer / page-number ───────────────────────────────────────────────
       if (s.showPageNumbers) {
         if (s.pageNumberPosition === "center") {
           footerCenter = (s.footerText ? s.footerText + " — " : "") + numStr;
@@ -1044,7 +962,6 @@ function buildPageLayouts(allPages: HTMLElement[][], s: PDFExportSettings): Page
         footerLeft = s.footerText ?? "";
       }
 
-      // ── Header ────────────────────────────────────────────────────────────
       if (s.headerText) {
         if (s.headerAlignment === "center") {
           headerCenter = s.headerText;
@@ -1089,7 +1006,6 @@ export default class MarkdownPDFPlugin extends Plugin {
     this.activeModal?.close();
   }
 
-  /** Open the modal, optionally pre-loading a specific file. */
   openModal(file?: TFile) {
     if (this.activeModal) this.activeModal.close();
     new PDFExportModal(this.app, this, file).open();
@@ -1118,27 +1034,7 @@ export default class MarkdownPDFPlugin extends Plugin {
 
 // ─── File resolver ────────────────────────────────────────────────────────────
 
-/**
- * Find the best markdown file to load when the modal opens.
- *
- * Four-level cascade so every real-world scenario is covered:
- *
- *  1. `initialFile`         — passed explicitly (right-click menu, command
- *                             with a specific file). Always wins.
- *  2. `getActiveViewOfType` — a MarkdownView is the currently focused leaf.
- *                             The common case when a note tab is open and active.
- *  3. `getActiveFile`       — "returns the most recently active file" per the
- *                             Obsidian API docs. Covers the case where the file
- *                             explorer sidebar retains focus after the user
- *                             clicks a file to open it.
- *  4. `getMostRecentLeaf`   — searches rootSplit (the main editor area),
- *                             explicitly ignoring sidebar leaves. The Obsidian
- *                             docs describe it as "useful for interacting with
- *                             the leaf in the root split while a sidebar leaf
- *                             might be active." Covers fresh Obsidian startup
- *                             before any click, and is file-manager-agnostic so
- *                             it works with any third-party file manager plugin.
- */
+// Four-level cascade: explicit file → active MarkdownView → active file → most recent leaf.
 function resolveActiveMarkdownFile(app: App, initialFile?: TFile | null): TFile | null {
   if (initialFile) return initialFile;
 
@@ -1196,10 +1092,8 @@ class PDFExportModal extends Modal {
       this.editorEl.value = content;
       this.noteTitleEl.textContent = file.basename;
       this.noteTitleEl.title = file.path;
-      // Show the loading overlay right away so the panel feels instantly open,
-      // then yield two animation frames so the browser can paint the modal and
-      // textarea content before the heavy pagination work starts.
       this.showLoading();
+      // Two rAFs let the browser paint the modal before pagination starts.
       await new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())));
       this.render(true);
     }
@@ -1235,19 +1129,15 @@ class PDFExportModal extends Modal {
       "Use --- for a horizontal rule.\n\n" +
       "Markdown tables:\n| Col A | Col B |\n|-------|-------|\n| Cell  | Cell  |";
 
-    // Wrap the preview in a container so the loading overlay (absolutely
-    // positioned) stays fixed over the viewport portion instead of scrolling
-    // along with the page thumbnails.
+    // Preview container keeps the loading overlay fixed (non-scrolling) over the panel.
     const previewContainer = main.createEl("div", { cls: "mpdf-preview-container" });
     this.previewEl = previewContainer.createEl("div", { cls: "mpdf-preview" });
 
-    // Loading overlay — hidden by default, shown while rendering.
     this.loadingOverlayEl = previewContainer.createEl("div", { cls: "mpdf-loading-overlay" });
     this.loadingOverlayEl.style.display = "none";
     this.loadingOverlayEl.createEl("div", { cls: "mpdf-spinner" });
     this.loadingOverlayEl.createEl("span", { cls: "mpdf-loading-text", text: "Rendering…" });
 
-    // Keyboard shortcut: Ctrl+Enter / Cmd+Enter to trigger a manual refresh.
     this.editorEl.addEventListener("keydown", (e) => {
       if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
         e.preventDefault();
@@ -1353,30 +1243,16 @@ class PDFExportModal extends Modal {
 
   // ── Render ──────────────────────────────────────────────────────────────────
 
-  /**
-   * Schedule a render.
-   *
-   * @param immediate  When true (button click, Ctrl+Enter, initial open) the
-   *                   render starts on the very next animation frame.
-   *                   When false (settings changes) a 150 ms debounce is
-   *                   applied so rapid successive changes collapse into one
-   *                   render instead of hammering the paginator.
-   *
-   * Either way the loading overlay is shown right away so the UI never looks
-   * frozen — the user always gets visual feedback that work is in progress.
-   */
+  // immediate=true: start on next frame (button, Ctrl+Enter, open).
+  // immediate=false: debounce 150ms (settings changes).
   render(immediate = false) {
     const token = ++this.renderToken;
-    // Cancel any pending debounced render — this one supersedes it.
     if (this.renderDebounceTimer !== null) {
       clearTimeout(this.renderDebounceTimer);
       this.renderDebounceTimer = null;
     }
-    // Show the loading state before any async gap so the UI responds instantly.
     this.showLoading();
 
-    // Shared error handler: if doRender throws (e.g. MarkdownRenderer fails),
-    // restore the UI rather than leaving the loading overlay up forever.
     const safeDo = () =>
       this.doRender(token).catch((err: unknown) => {
         const msg = err instanceof Error ? err.message : String(err);
@@ -1386,10 +1262,8 @@ class PDFExportModal extends Modal {
       });
 
     if (immediate) {
-      // Two rAFs are required: the first fires before the browser paints,
-      // the second fires after. Without the second one the heavy synchronous
-      // pagination work in doRender blocks the thread before the browser ever
-      // gets a chance to render the spinner/disabled-button state.
+      // Two rAFs: first fires before paint, second after — ensures the spinner
+      // renders before the synchronous pagination work blocks the thread.
       requestAnimationFrame(() => requestAnimationFrame(() => void safeDo()));
     } else {
       this.renderDebounceTimer = setTimeout(() => {
@@ -1399,29 +1273,8 @@ class PDFExportModal extends Modal {
     }
   }
 
-  // ── Auto page-break insertion ────────────────────────────────────────────────
-
-  /**
-   * Inserts `///` (manual page-break markers) immediately before H1 and/or H2
-   * headings, but ONLY when those headings are genuine Markdown headings — i.e.
-   * `# ` / `## ` at the start of a line that is NOT inside a fenced code block.
-   *
-   * Without this guard the plain regex approach fires on `#` comment lines
-   * inside Python, Shell, Ruby, etc. code blocks that happen to start with `# `.
-   *
-   * Heading detection uses `^# ` / `^## ` anchored at the start of the line,
-   * so indented headings (`    # comment`), tab-indented lines, and tags with
-   * no trailing space (`#tag`) are all correctly ignored without extra logic.
-   *
-   * Fencing rules (CommonMark §4.5):
-   *   • A fence opens with a line beginning with 3+ back-ticks or 3+ tildes.
-   *   • It closes with a line of the same character and at least the same length,
-   *     with optional trailing whitespace only.
-   *
-   * A break is never inserted before the very first heading in the document
-   * (checked via `out.length > 0`) so the opening heading doesn't acquire a
-   * spurious blank page above it.
-   */
+  // Inserts `///` before H1/H2 headings, skipping headings inside fenced
+  // code blocks and the very first heading in the document.
   private static insertAutoBreaks(
     md: string,
     breakH1: boolean,
@@ -1441,13 +1294,11 @@ class PDFExportModal extends Modal {
           inFence     = true;
           fenceMarker = open[1];
         } else if (out.length > 0) {
-          // Only true headings: `^# ` cannot match `## …` because position 1
-          // would be `#` not ` `; likewise `^## ` cannot match `### …`.
           if      (breakH1 && /^# /.test(line))  out.push("///");
           else if (breakH2 && /^## /.test(line)) out.push("///");
         }
       } else {
-        // A closing fence uses the same character and is at least as long.
+        // Close fence: same character, at least as long.
         const close = line.match(/^(`{3,}|~{3,})\s*$/);
         if (
           close &&
@@ -1468,16 +1319,10 @@ class PDFExportModal extends Modal {
     const s = this.plugin.settings;
     let md = normalizeMarkdown(this.editorEl.value);
 
-    // Strip YAML frontmatter when the option is enabled, so property blocks
-    // are hidden in both the preview and the exported PDF.
     if (s.hideFrontmatter) {
       md = stripFrontmatter(md);
     }
 
-    // Prepend the file name as an H1 title when the option is enabled and a
-    // file is loaded. This mirrors Obsidian's built-in "Include file name as
-    // title" PDF export option, so the rendered document leads with the note
-    // title even when the markdown itself contains no top-level heading.
     if (s.includeFilenameAsTitle && this.currentFile) {
       md = `# ${this.currentFile.basename}\n\n${md}`;
     }
@@ -1504,7 +1349,6 @@ class PDFExportModal extends Modal {
       sections.map((sec) => renderMarkdownToHtml(this.app, sec.trim(), sourcePath, this.renderComponent)),
     );
 
-    // Bail if a newer render has been requested while we were awaiting.
     if (token !== this.renderToken) return;
 
     const allPages: HTMLElement[][] = [];
@@ -1518,26 +1362,20 @@ class PDFExportModal extends Modal {
 
     this.drawPreview(this.layoutCache, s.previewScale);
     this.pageCountEl.textContent = `${layouts.length} page${layouts.length !== 1 ? "s" : ""}`;
-    // Render finished — restore the UI to its interactive state.
     this.hideLoading();
   }
 
-  // Re-draw from the cached layout without re-paginating (zoom-only change).
   private renderPreviewOnly() {
     if (!this.layoutCache) return;
     this.drawPreview(this.layoutCache, this.plugin.settings.previewScale);
   }
 
-  // ── Loading state helpers ────────────────────────────────────────────────────
-
-  /** Show the spinning overlay and disable the Render button. */
   private showLoading() {
     this.loadingOverlayEl.style.display = "flex";
     this.renderBtn.disabled = true;
     this.renderBtn.textContent = "Rendering…";
   }
 
-  /** Hide the spinning overlay and restore the Render button. */
   private hideLoading() {
     this.loadingOverlayEl.style.display = "none";
     this.renderBtn.disabled = false;
@@ -1545,14 +1383,12 @@ class PDFExportModal extends Modal {
   }
 
   private drawPreview(c: LayoutCache, scale: number) {
-    const { layouts, pw, ph, mTop, mLeft, footerH, headerH, contentW, contentH, docCSS, fontFamily, accentColor, pageBackground } = c;
+    const { layouts, pw, ph, mTop, mLeft, footerH, headerH, contentW, docCSS, fontFamily, accentColor, pageBackground } = c;
     const s = this.plugin.settings;
     this.previewEl.empty();
 
-    // Build heading id → page-wrap map so anchor clicks can scroll to the right page.
-    // We index by page-wrap index so we can call scrollIntoView on the *wrapper*
-    // (which lives in the light DOM and is findable), not on the element inside the
-    // shadow root (which querySelector on the light tree cannot reach).
+    // Map heading IDs to page-wrap indices for in-page anchor scrolling.
+    // We scroll the light-DOM wrap (not the shadow-root element) into view.
     const idToWrapIndex = new Map<string, number>();
     layouts.forEach((layout, i) => {
       for (const node of layout.pageNodes) {
@@ -1563,7 +1399,6 @@ class PDFExportModal extends Modal {
       }
     });
 
-    // Keep references to the page-wrap elements so anchor clicks can find them.
     const pageWraps: HTMLElement[] = [];
 
     for (const layout of layouts) {
@@ -1578,14 +1413,8 @@ class PDFExportModal extends Modal {
       const scaleWrap = wrap.createEl("div", { cls: "mpdf-page-scale" });
       scaleWrap.style.cssText = `width:${scaledW}px;height:${scaledH}px;overflow:hidden;position:relative;`;
 
-      // ── Shadow host ──────────────────────────────────────────────────────────
-      // Each page is rendered inside a shadow root so that Obsidian's theme CSS
-      // is physically prevented from reaching the page content. External CSS
-      // cannot cross the shadow boundary — only explicitly inherited CSS custom
-      // properties can, and our generated CSS uses no variables at all, only
-      // fully-resolved values from the active preset. The shadow host takes the
-      // place of the old .mpdf-page div; its box-shadow and background are now
-      // declared inside the :host rule within the shadow stylesheet.
+      // Each page renders inside a shadow root so Obsidian's theme CSS cannot
+      // reach the page content across the shadow boundary.
       const shadowHost = document.createElement("div");
       shadowHost.style.cssText = [
         `width:${pw}px`, `height:${ph}px`,
@@ -1596,8 +1425,6 @@ class PDFExportModal extends Modal {
 
       const shadow = shadowHost.attachShadow({ mode: "open" });
 
-      // Scoped stylesheet: :host supplies the page background, shadow and
-      // box-model reset; the rest is the same docCSS used by the PDF export.
       const styleEl = document.createElement("style");
       styleEl.textContent = `
         :host {
@@ -1644,14 +1471,10 @@ class PDFExportModal extends Modal {
       // ── Content ──────────────────────────────────────────────────────────────
       const contentDiv = document.createElement("div");
       contentDiv.className = "mpdf-doc";
-      // No height or overflow:hidden here — the shadow :host already clips at
-      // the full page boundary (ph px). Adding a second clip at contentH caused
-      // the last line(s) to vanish in preview: the paginator measures nodes in
-      // a light-DOM sandbox while the preview renders in shadow DOM, and subtle
-      // sub-pixel differences between the two contexts meant content that
-      // measured as fitting could render fractionally taller and get clipped.
-      // The export path never set height/overflow on this div, which is why
-      // the same content appeared correctly in the exported PDF.
+      // No height/overflow:hidden — the :host clips at the page boundary.
+      // A second clip here caused bottom lines to vanish in preview due to
+      // sub-pixel differences between the light-DOM paginator sandbox and
+      // the shadow DOM rendering context. The export path never set these.
       contentDiv.style.cssText = [
         "position:absolute", `top:${mTop + headerH}px`, `left:${mLeft}px`,
         `width:${contentW}px`,
@@ -1659,8 +1482,7 @@ class PDFExportModal extends Modal {
       for (const node of layout.pageNodes) contentDiv.appendChild(node.cloneNode(true));
       shadow.appendChild(contentDiv);
 
-      // Wire internal anchor links. Because content is inside a shadow root,
-      // we scroll the *page-wrap* (light DOM) into view instead of the element.
+      // Wire internal anchor links via light-DOM page-wrap scrollIntoView.
       contentDiv.querySelectorAll<HTMLAnchorElement>("a[href^='#']").forEach((a) => {
         const targetId = decodeURIComponent(a.getAttribute("href")!.slice(1));
         const wrapIdx  = idToWrapIndex.get(targetId);
@@ -1674,9 +1496,7 @@ class PDFExportModal extends Modal {
       });
 
       // ── Footer ───────────────────────────────────────────────────────────────
-      // Guard against rendering an empty footer div (and its border-top) when
-      // all footer fields are blank — which is exactly the state produced for
-      // page 1 when showHeaderFooterOnFirstPage is disabled.
+      // Skip empty footer divs (e.g. page 1 when showHeaderFooterOnFirstPage is off).
       const hasFooter = s.showFooter && (layout.footerLeft || layout.footerRight || layout.footerCenter);
       if (hasFooter) {
         const footer = document.createElement("div");
@@ -1707,20 +1527,13 @@ class PDFExportModal extends Modal {
   }
 
   // ── Export ──────────────────────────────────────────────────────────────────
-  //
-  // Reuses the same paginated page nodes from the last preview render, so the
-  // exported PDF is guaranteed to be pixel-identical to what the user sees.
-  // Each page becomes a fixed-size <div> in a standalone HTML document which
-  // Electron's printToPDF renders with @page margin: none.
 
   private async exportPDF() {
     const s = this.plugin.settings;
 
-    // Disable the export button immediately so the user knows work is happening.
     this.exportBtn.disabled = true;
     this.exportBtn.textContent = "⬇ Exporting…";
 
-    // Helper to restore the button in every exit path.
     const resetExportBtn = () => {
       this.exportBtn.disabled = false;
       this.exportBtn.textContent = "⬇ Export PDF";
@@ -1831,7 +1644,6 @@ ${pageHTMLParts.join("\n")}
         return;
       }
 
-      // Let the user know the hidden window is generating the PDF.
       new Notice("Generating PDF…");
 
       const blob = new Blob([fullHTML], { type: "text/html" });
@@ -1840,13 +1652,11 @@ ${pageHTMLParts.join("\n")}
 
       win.loadURL(url);
 
-      // Guard: both did-fail-load (subresource errors) and did-finish-load can fire
-      // for the same page load. This flag ensures we only act on the first one.
+      // Both did-fail-load and did-finish-load can fire for the same load;
+      // guard with a flag so only the first one acts.
       let exportHandled = false;
       const cleanupWin = () => { URL.revokeObjectURL(url); win.close(); resetExportBtn(); };
 
-      // Guard against the page failing to load (OOM, sandbox restrictions, etc.).
-      // Without this, did-finish-load never fires and the UI permanently locks.
       win.webContents.once("did-fail-load", (_event: unknown, _code: number, desc: string) => {
         if (exportHandled) return;
         exportHandled = true;
