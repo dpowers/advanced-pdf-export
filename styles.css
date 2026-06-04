@@ -14,6 +14,8 @@
   padding: 0;
   height: 100%;
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 /* Top bar — three-section flex layout: controls | title | actions */
@@ -271,3 +273,10 @@
    Each preview page is now a Shadow DOM host; its background, box-shadow,
    and dimensions are declared via :host {} inside the per-page shadow stylesheet
    that drawPreview() generates from the active preset's values. */
+
+/* Zoom slider in the topbar — width and accent colour kept in CSS so the
+   inline style can be dropped from main.ts. */
+.mpdf-zoom-slider {
+  width: 64px;
+  accent-color: var(--interactive-accent);
+}

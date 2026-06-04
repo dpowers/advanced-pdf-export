@@ -49,8 +49,14 @@ interface PDFExportSettings extends DocStyle {
   footerText: string;
   showHeader: boolean;
   showFooter: boolean;
+  showFooterBorder: boolean;
   showPageNumbers: boolean;
   pageNumberPosition: "center" | "left" | "right";
+  pageNumberStart: number;
+  showHeaderFooterOnFirstPage: boolean;
+  headerAlignment: "left" | "center" | "right";
+  hideFrontmatter: boolean;
+  customFontName: string;
   autoBreakH1: boolean;
   autoBreakH2: boolean;
   includeFilenameAsTitle: boolean;
@@ -80,7 +86,9 @@ interface PageLayout {
   pageNodes: HTMLElement[];
   pageNum: number;
   totalPages: number;
-  headerText: string;
+  headerLeft: string;
+  headerCenter: string;
+  headerRight: string;
   footerLeft: string;
   footerRight: string;
   footerCenter: string;
@@ -254,8 +262,14 @@ const DEFAULT_SETTINGS: PDFExportSettings = {
   footerText: "",
   showHeader: true,
   showFooter: true,
+  showFooterBorder: true,
   showPageNumbers: true,
   pageNumberPosition: "right",
+  pageNumberStart: 1,
+  showHeaderFooterOnFirstPage: true,
+  headerAlignment: "right",
+  hideFrontmatter: false,
+  customFontName: "",
   autoBreakH1: false,
   autoBreakH2: false,
   includeFilenameAsTitle: false,
@@ -283,6 +297,17 @@ function normalizeMarkdown(raw: string): string {
   // Callout blocks (> [!TYPE] …) are intentionally left intact so that
   // Obsidian's MarkdownRenderer can convert them to .callout HTML elements,
   // which the plugin then styles distinctly via buildDocCSS.
+}
+
+/**
+ * Strips a YAML frontmatter block from the start of a markdown document.
+ * Matches the opening `---`, any content, and the closing `---` (with
+ * optional trailing whitespace on the fence lines), so it handles both
+ * Unix and Windows line endings. If no frontmatter is present the string
+ * is returned unchanged.
+ */
+function stripFrontmatter(md: string): string {
+  return md.replace(/^---[ \t]*\r?\n[\s\S]*?\r?\n---[ \t]*(\r?\n|$)/, "");
 }
 
 function splitMarkdownSections(md: string): string[] {
@@ -399,6 +424,11 @@ function hexLuminance(hex: string): number {
 
 function buildDocCSS(s: PDFExportSettings): string {
   const hs = s.headingScale;
+  // Resolve custom font: when "__custom__" is selected use customFontName,
+  // otherwise use the preset's font stack directly.
+  const fontFamily = s.fontFamily === "__custom__"
+    ? (s.customFontName.trim() || "inherit")
+    : s.fontFamily;
   // Choose white or heading-colour text based on the actual background
   // luminance, so customised colours work correctly regardless of preset name.
   const tableHeaderTextColor =
@@ -406,7 +436,7 @@ function buildDocCSS(s: PDFExportSettings): string {
 
   return `
   .mpdf-doc {
-    font-family: ${s.fontFamily};
+    font-family: ${fontFamily};
     font-size: ${s.fontSize}px;
     line-height: ${s.lineHeight};
     color: ${s.bodyColor};
@@ -526,7 +556,7 @@ function buildDocCSS(s: PDFExportSettings): string {
     padding: 7px 12px !important;
     background: ${s.accentColor}28 !important;
     border-bottom: 1px solid ${s.accentColor}33 !important;
-    font-family: ${s.fontFamily} !important;
+    font-family: ${fontFamily} !important;
     font-size: 0.8em !important;
     font-weight: 800 !important;
     font-style: normal !important;
@@ -970,25 +1000,50 @@ function paginateHTML(
 function buildPageLayouts(allPages: HTMLElement[][], s: PDFExportSettings): PageLayout[] {
   const totalPages = allPages.length;
   return allPages.map((pageNodes, i) => {
-    const pageNum  = i + 1;
-    const numStr   = `${pageNum} / ${totalPages}`;
-    let footerLeft = "", footerRight = "", footerCenter = "";
+    const pageNum = i + 1;
+    // When first-page header/footer is disabled, page 0 is always blank.
+    const showHF = s.showHeaderFooterOnFirstPage || i > 0;
 
-    if (s.showPageNumbers) {
-      if (s.pageNumberPosition === "center") {
-        footerCenter = (s.footerText ? s.footerText + " — " : "") + numStr;
-      } else if (s.pageNumberPosition === "left") {
-        footerLeft  = numStr;
-        footerRight = s.footerText ?? "";
+    // Compute the display number.
+    //   enabled:  page index 0 → pageNumberStart,   1 → pageNumberStart+1, …
+    //   disabled: page index 1 → pageNumberStart,   2 → pageNumberStart+1, …
+    const displayNum = s.showHeaderFooterOnFirstPage
+      ? s.pageNumberStart + i
+      : s.pageNumberStart + (i - 1);
+    const numStr = `${displayNum} / ${totalPages}`;
+
+    let footerLeft = "", footerRight = "", footerCenter = "";
+    let headerLeft = "", headerCenter = "", headerRight = "";
+
+    if (showHF) {
+      // ── Footer / page-number ───────────────────────────────────────────────
+      if (s.showPageNumbers) {
+        if (s.pageNumberPosition === "center") {
+          footerCenter = (s.footerText ? s.footerText + " — " : "") + numStr;
+        } else if (s.pageNumberPosition === "left") {
+          footerLeft  = numStr;
+          footerRight = s.footerText ?? "";
+        } else {
+          footerLeft  = s.footerText ?? "";
+          footerRight = numStr;
+        }
       } else {
-        footerLeft  = s.footerText ?? "";
-        footerRight = numStr;
+        footerLeft = s.footerText ?? "";
       }
-    } else {
-      footerLeft = s.footerText ?? "";
+
+      // ── Header ────────────────────────────────────────────────────────────
+      if (s.headerText) {
+        if (s.headerAlignment === "center") {
+          headerCenter = s.headerText;
+        } else if (s.headerAlignment === "left") {
+          headerLeft = s.headerText;
+        } else {
+          headerRight = s.headerText;
+        }
+      }
     }
 
-    return { pageNodes, pageNum, totalPages, headerText: s.headerText, footerLeft, footerRight, footerCenter };
+    return { pageNodes, pageNum, totalPages, headerLeft, headerCenter, headerRight, footerLeft, footerRight, footerCenter };
   });
 }
 
@@ -1118,7 +1173,6 @@ class PDFExportModal extends Modal {
     this.plugin.activeModal = this;
     this.renderComponent.load();
     this.modalEl.addClass("mpdf-modal");
-    this.contentEl.style.cssText = "display:flex;flex-direction:column;height:100%;padding:0;overflow:hidden;";
     this.buildUI(this.contentEl);
 
     const file = resolveActiveMarkdownFile(this.app, this.initialFile);
@@ -1243,7 +1297,7 @@ class PDFExportModal extends Modal {
     zoomSlider.max   = "1.0";
     zoomSlider.step  = "0.05";
     zoomSlider.value = String(s.previewScale);
-    zoomSlider.style.cssText = "width:64px;accent-color:var(--interactive-accent);";
+    zoomSlider.addClass("mpdf-zoom-slider");
     zoomSlider.addEventListener("input", async () => {
       const v = parseFloat(zoomSlider.value);
       this.plugin.settings.previewScale = v;
@@ -1401,6 +1455,12 @@ class PDFExportModal extends Modal {
     const s = this.plugin.settings;
     let md = normalizeMarkdown(this.editorEl.value);
 
+    // Strip YAML frontmatter when the option is enabled, so property blocks
+    // are hidden in both the preview and the exported PDF.
+    if (s.hideFrontmatter) {
+      md = stripFrontmatter(md);
+    }
+
     // Prepend the file name as an H1 title when the option is enabled and a
     // file is loaded. This mirrors Obsidian's built-in "Include file name as
     // title" PDF export option, so the rendered document leads with the note
@@ -1440,7 +1500,8 @@ class PDFExportModal extends Modal {
     }
 
     const layouts = buildPageLayouts(allPages, s);
-    this.layoutCache = { layouts, pw, ph, mTop, mLeft, footerH, headerH, contentW, contentH, docCSS, fontFamily: s.fontFamily, accentColor: s.accentColor, pageBackground: s.pageBackground };
+    const resolvedFont = s.fontFamily === "__custom__" ? (s.customFontName.trim() || "inherit") : s.fontFamily;
+    this.layoutCache = { layouts, pw, ph, mTop, mLeft, footerH, headerH, contentW, contentH, docCSS, fontFamily: resolvedFont, accentColor: s.accentColor, pageBackground: s.pageBackground };
 
     this.drawPreview(this.layoutCache, s.previewScale);
     this.pageCountEl.textContent = `${layouts.length} page${layouts.length !== 1 ? "s" : ""}`;
@@ -1542,13 +1603,28 @@ class PDFExportModal extends Modal {
       shadow.appendChild(styleEl);
 
       // ── Header ───────────────────────────────────────────────────────────────
-      if (s.showHeader && layout.headerText) {
+      const hasHeader = s.showHeader && (layout.headerLeft || layout.headerCenter || layout.headerRight);
+      if (hasHeader) {
         const hdr = document.createElement("div");
-        hdr.textContent = layout.headerText;
         hdr.style.cssText = [
-          "position:absolute", `top:${mTop * 0.4}px`, `right:${mLeft}px`,
+          "position:absolute", `top:${mTop * 0.4}px`, `left:${mLeft}px`, `right:${mLeft}px`,
+          "display:flex", "align-items:center",
           "font-size:9px", "color:#999", `font-family:${fontFamily}`, "white-space:nowrap",
         ].join(";");
+        if (layout.headerCenter) {
+          const span = document.createElement("span");
+          span.style.cssText = "flex:1;text-align:center;";
+          span.textContent = layout.headerCenter;
+          hdr.appendChild(span);
+        } else {
+          const leftSpan = document.createElement("span");
+          leftSpan.textContent = layout.headerLeft;
+          hdr.appendChild(leftSpan);
+          const rightSpan = document.createElement("span");
+          rightSpan.style.marginLeft = "auto";
+          rightSpan.textContent = layout.headerRight;
+          hdr.appendChild(rightSpan);
+        }
         shadow.appendChild(hdr);
       }
 
@@ -1577,14 +1653,18 @@ class PDFExportModal extends Modal {
       });
 
       // ── Footer ───────────────────────────────────────────────────────────────
-      if (s.showFooter) {
+      // Guard against rendering an empty footer div (and its border-top) when
+      // all footer fields are blank — which is exactly the state produced for
+      // page 1 when showHeaderFooterOnFirstPage is disabled.
+      const hasFooter = s.showFooter && (layout.footerLeft || layout.footerRight || layout.footerCenter);
+      if (hasFooter) {
         const footer = document.createElement("div");
         footer.style.cssText = [
           "position:absolute", "bottom:0", "left:0", "right:0",
           `height:${footerH}px`, "display:flex", "align-items:center",
-          `border-top:0.5px solid ${accentColor}33`,
+          s.showFooterBorder ? `border-top:0.5px solid ${accentColor}33` : "",
           `padding:0 ${mLeft}px`, "font-size:9px", "color:#aaa", `font-family:${fontFamily}`,
-        ].join(";");
+        ].filter(Boolean).join(";");
 
         if (layout.footerCenter) {
           const span = document.createElement("span");
@@ -1659,16 +1739,22 @@ class PDFExportModal extends Modal {
     const pageHTMLParts = layouts.map((layout) => {
       const contentHTML = layout.pageNodes.map((n) => n.outerHTML).join("\n");
 
-      const headerHTML = s.showHeader && layout.headerText
-        ? `<div style="position:absolute;top:${mTop * 0.4}px;right:${mLeft}px;font-size:9px;color:#999;font-family:${fontFamily};white-space:nowrap;">${escapeHTML(layout.headerText)}</div>`
+      const hasExportHeader = s.showHeader && (layout.headerLeft || layout.headerCenter || layout.headerRight);
+      const headerInnerHTML = layout.headerCenter
+        ? `<span style="flex:1;text-align:center;">${escapeHTML(layout.headerCenter)}</span>`
+        : `<span>${escapeHTML(layout.headerLeft)}</span><span style="margin-left:auto;">${escapeHTML(layout.headerRight)}</span>`;
+      const headerHTML = hasExportHeader
+        ? `<div style="position:absolute;top:${mTop * 0.4}px;left:${mLeft}px;right:${mLeft}px;display:flex;align-items:center;font-size:9px;color:#999;font-family:${fontFamily};white-space:nowrap;">${headerInnerHTML}</div>`
         : "";
 
       const footerInnerHTML = layout.footerCenter
         ? `<span style="flex:1;text-align:center;">${escapeHTML(layout.footerCenter)}</span>`
         : `<span>${escapeHTML(layout.footerLeft)}</span><span style="margin-left:auto;">${escapeHTML(layout.footerRight)}</span>`;
 
-      const footerHTML = s.showFooter
-        ? `<div style="position:absolute;bottom:0;left:0;right:0;height:${footerH}px;display:flex;align-items:center;border-top:0.5px solid ${exportAccent}33;padding:0 ${mLeft}px;font-size:9px;color:#aaa;font-family:${fontFamily};">${footerInnerHTML}</div>`
+      const hasExportFooter = s.showFooter && (layout.footerLeft || layout.footerRight || layout.footerCenter);
+      const footerBorder = s.showFooterBorder ? `border-top:0.5px solid ${exportAccent}33;` : "";
+      const footerHTML = hasExportFooter
+        ? `<div style="position:absolute;bottom:0;left:0;right:0;height:${footerH}px;display:flex;align-items:center;${footerBorder}padding:0 ${mLeft}px;font-size:9px;color:#aaa;font-family:${fontFamily};">${footerInnerHTML}</div>`
         : "";
 
       const contentDivHTML = `<div class="mpdf-doc" style="position:absolute;top:${mTop + headerH}px;left:${mLeft}px;width:${contentW}px;">${contentHTML}</div>`;
@@ -1887,6 +1973,7 @@ class PDFExportSettingTab extends PluginSettingTab {
 
     // ── Typography ────────────────────────────────────────────────────────────
     containerEl.createEl("h3", { text: "Typography" });
+    let customFontSetting: Setting;
     new Setting(containerEl).setName("Font family").addDropdown((d) =>
       d.addOptions({
         "Georgia, serif":                          "Georgia (Serif)",
@@ -1896,9 +1983,23 @@ class PDFExportSettingTab extends PluginSettingTab {
         "'Helvetica Neue', Helvetica, sans-serif": "Helvetica",
         "'Trebuchet MS', sans-serif":              "Trebuchet",
         "'Courier New', monospace":                "Courier New",
+        "__custom__":                              "Custom…",
       }).setValue(s.fontFamily)
-       .onChange(async (v) => { s.fontFamily = v; await this.markDirty(); }),
+       .onChange(async (v) => {
+         s.fontFamily = v;
+         customFontSetting.settingEl.style.display = v === "__custom__" ? "" : "none";
+         await this.markDirty();
+       }),
     );
+    customFontSetting = new Setting(containerEl)
+      .setName("Custom font name")
+      .setDesc("CSS font-family value — e.g. \"Inter, sans-serif\". The font must be installed on your system.")
+      .addText((t) =>
+        t.setPlaceholder("e.g. Inter, sans-serif")
+         .setValue(s.customFontName)
+         .onChange(async (v) => { s.customFontName = v; await this.markDirty(); }),
+      );
+    customFontSetting.settingEl.style.display = s.fontFamily === "__custom__" ? "" : "none";
     new Setting(containerEl).setName("Font size (px)").addDropdown((d) => {
       ["10","11","12","13","14","15","16"].forEach((v) => d.addOption(v, v + "px"));
       d.setValue(String(s.fontSize)).onChange(async (v) => {
@@ -1973,10 +2074,18 @@ class PDFExportSettingTab extends PluginSettingTab {
     );
     new Setting(containerEl)
       .setName("Header text")
-      .setDesc("Appears top-right on every page.")
+      .setDesc("Appears on every page according to the chosen alignment.")
       .addText((t) => t.setValue(s.headerText).onChange(async (v) => { s.headerText = v; await this.markDirty(); }));
+    new Setting(containerEl).setName("Header alignment").addDropdown((d) =>
+      d.addOptions({ left: "Left", center: "Center", right: "Right" })
+       .setValue(s.headerAlignment)
+       .onChange(async (v) => { s.headerAlignment = v as "left"|"center"|"right"; await this.markDirty(); }),
+    );
     new Setting(containerEl).setName("Show footer").addToggle((t) =>
       t.setValue(s.showFooter).onChange(async (v) => { s.showFooter = v; await this.markDirty(); }),
+    );
+    new Setting(containerEl).setName("Footer border").setDesc("Show the separator line above the footer.").addToggle((t) =>
+      t.setValue(s.showFooterBorder).onChange(async (v) => { s.showFooterBorder = v; await this.markDirty(); }),
     );
     new Setting(containerEl)
       .setName("Footer text")
@@ -1989,9 +2098,38 @@ class PDFExportSettingTab extends PluginSettingTab {
        .setValue(s.pageNumberPosition)
        .onChange(async (v) => { s.pageNumberPosition = v as "left"|"center"|"right"; await this.markDirty(); }),
     );
+    new Setting(containerEl)
+      .setName("Page number start")
+      .setDesc("Number assigned to the first visible page number. Accepts any integer.")
+      .addText((t) =>
+        t.setValue(String(s.pageNumberStart))
+         .onChange(async (v) => {
+           const n = parseInt(v, 10);
+           s.pageNumberStart = isNaN(n) ? 1 : n;
+           await this.markDirty();
+         }),
+      );
+    new Setting(containerEl)
+      .setName("Header/footer on first page")
+      .setDesc("When off, page 1 has no header, footer, or page number. Numbering begins on page 2 using the start value.")
+      .addToggle((t) =>
+        t.setValue(s.showHeaderFooterOnFirstPage).onChange(async (v) => {
+          s.showHeaderFooterOnFirstPage = v;
+          await this.markDirty();
+        }),
+      );
 
     // ── Behaviour ─────────────────────────────────────────────────────────────
     containerEl.createEl("h3", { text: "Behaviour" });
+    new Setting(containerEl)
+      .setName("Hide frontmatter")
+      .setDesc("Strip the YAML frontmatter block (--- … ---) from the preview and exported PDF.")
+      .addToggle((t) =>
+        t.setValue(s.hideFrontmatter).onChange(async (v) => {
+          s.hideFrontmatter = v;
+          await this.markDirty();
+        }),
+      );
     new Setting(containerEl)
       .setName("Include file name as title")
       .setDesc(
