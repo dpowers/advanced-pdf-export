@@ -78,6 +78,7 @@ interface LayoutCache {
   fontFamily: string;
   accentColor: string;
   pageBackground: string;
+  isRTL: boolean;
 }
 
 interface PageLayout {
@@ -287,6 +288,20 @@ function escapeHTML(s: string): string {
     .replace(/"/g, "&quot;");
 }
 
+/**
+ * Returns true when the text contains a meaningful proportion of RTL script
+ * characters (Arabic, Hebrew, Persian, Syriac, Thaana, NKo, etc.).
+ * We count RTL vs total directional characters rather than testing a single
+ * char so mixed documents lean toward the dominant script.
+ */
+const RTL_CHARS   = /[\u0590-\u08FF\uFB1D-\uFDFD\uFE70-\uFEFC]/g;
+const TOTAL_ALPHA = /[A-Za-z\u0590-\u08FF\uFB1D-\uFDFD\uFE70-\uFEFC]/g;
+function isRTLContent(text: string): boolean {
+  const rtl   = (text.match(RTL_CHARS)   ?? []).length;
+  const total = (text.match(TOTAL_ALPHA) ?? []).length;
+  return total > 0 && rtl / total > 0.1; // RTL wins if >10 % of alpha chars
+}
+
 // ─── Markdown helpers ─────────────────────────────────────────────────────────
 
 function normalizeMarkdown(raw: string): string {
@@ -374,7 +389,7 @@ function hexLuminance(hex: string): number {
   return 0.2126 * r + 0.7152 * g + 0.0722 * b;
 }
 
-function buildDocCSS(s: PDFExportSettings): string {
+function buildDocCSS(s: PDFExportSettings, isRTL = false): string {
   const hs = s.headingScale;
   const fontFamily = s.fontFamily === "__custom__"
     ? (s.customFontName.trim() || "inherit")
@@ -389,6 +404,7 @@ function buildDocCSS(s: PDFExportSettings): string {
     line-height: ${s.lineHeight};
     color: ${s.bodyColor};
     box-sizing: border-box;
+    ${isRTL ? "direction: rtl;" : ""}
   }
   .mpdf-doc *, .mpdf-doc *::before, .mpdf-doc *::after { box-sizing: border-box; }
   .mpdf-doc strong, .mpdf-doc b { font-weight: 700; font-style: normal; }
@@ -422,12 +438,13 @@ function buildDocCSS(s: PDFExportSettings): string {
   .mpdf-doc h5 { font-size: ${Math.round(12 * hs)}px; font-weight: 600; color: ${s.headingColor}; margin: 10px 0 4px; font-style: italic; }
   .mpdf-doc h6 { font-size: ${Math.round(11 * hs)}px; font-weight: 600; color: ${s.bodyColor}; margin: 8px 0 4px; font-style: italic; opacity: 0.75; }
   .mpdf-doc p { margin: 0 0 ${s.paragraphSpacing}em; }
-  .mpdf-doc ul, .mpdf-doc ol { padding-left: 1.4em; margin: 0 0 ${s.paragraphSpacing}em; }
+  .mpdf-doc ul, .mpdf-doc ol { padding-inline-start: 1.4em; margin: 0 0 ${s.paragraphSpacing}em; }
   .mpdf-doc li { margin-bottom: 0.2em; line-height: ${s.lineHeight}; }
   .mpdf-doc blockquote {
-    border-left: 3px solid ${s.blockquoteBorderColor};
+    border-inline-start: 3px solid ${s.blockquoteBorderColor};
     background: ${s.blockquoteBg};
-    padding: 4px 0 4px 1em;
+    padding-block: 4px;
+    padding-inline: 1em 0;
     margin: ${s.paragraphSpacing}em 0;
     font-style: italic;
     color: ${s.bodyColor}cc;
@@ -471,7 +488,7 @@ function buildDocCSS(s: PDFExportSettings): string {
     background: ${s.tableHeaderBg};
     color: ${tableHeaderTextColor};
     padding: 6px 10px;
-    text-align: left;
+    text-align: start;
     font-weight: 600;
     border: 0.5px solid ${s.accentColor}33;
     font-size: 0.9em;
@@ -482,8 +499,11 @@ function buildDocCSS(s: PDFExportSettings): string {
   /* Callouts — override theme styles with !important so preview and PDF are
    * identical regardless of the active Obsidian theme. */
   .mpdf-doc .callout {
-    border-left: 4px solid ${s.accentColor} !important;
-    border-radius: 0 5px 5px 0 !important;
+    border-inline-start: 4px solid ${s.accentColor} !important;
+    border-start-start-radius: 0 !important;
+    border-start-end-radius: 5px !important;
+    border-end-end-radius: 5px !important;
+    border-end-start-radius: 0 !important;
     background: ${s.accentColor}12 !important;
     margin: ${s.paragraphSpacing * 1.2}em 0 !important;
     padding: 0 !important;
@@ -537,7 +557,7 @@ function buildDocCSS(s: PDFExportSettings): string {
   .mpdf-doc .callout-content > p:last-child  { margin-bottom: 0 !important; }
   /* Nested blockquotes inside callout content keep a subtler indent */
   .mpdf-doc .callout-content blockquote {
-    border-left-color: ${s.accentColor}66 !important;
+    border-inline-start-color: ${s.accentColor}66 !important;
     background: transparent !important;
   }
   `.trim();
@@ -1342,7 +1362,8 @@ class PDFExportModal extends Modal {
     const headerH = s.showHeader && s.headerText ? 20 : 0;
     const contentW = pw - mLeft - mRight;
     const contentH = ph - mTop - mBottom - footerH - headerH;
-    const docCSS   = buildDocCSS(s);
+    const isRTL    = isRTLContent(this.editorEl.value);
+    const docCSS   = buildDocCSS(s, isRTL);
     const sourcePath = this.currentFile?.path ?? "pdf-export";
 
     const sectionHtml = await Promise.all(
@@ -1358,7 +1379,7 @@ class PDFExportModal extends Modal {
 
     const layouts = buildPageLayouts(allPages, s);
     const resolvedFont = s.fontFamily === "__custom__" ? (s.customFontName.trim() || "inherit") : s.fontFamily;
-    this.layoutCache = { layouts, pw, ph, mTop, mLeft, footerH, headerH, contentW, contentH, docCSS, fontFamily: resolvedFont, accentColor: s.accentColor, pageBackground: s.pageBackground };
+    this.layoutCache = { layouts, pw, ph, mTop, mLeft, footerH, headerH, contentW, contentH, docCSS, fontFamily: resolvedFont, accentColor: s.accentColor, pageBackground: s.pageBackground, isRTL };
 
     this.drawPreview(this.layoutCache, s.previewScale);
     this.pageCountEl.textContent = `${layouts.length} page${layouts.length !== 1 ? "s" : ""}`;
@@ -1383,7 +1404,7 @@ class PDFExportModal extends Modal {
   }
 
   private drawPreview(c: LayoutCache, scale: number) {
-    const { layouts, pw, ph, mTop, mLeft, footerH, headerH, contentW, docCSS, fontFamily, accentColor, pageBackground } = c;
+    const { layouts, pw, ph, mTop, mLeft, footerH, headerH, contentW, docCSS, fontFamily, accentColor, pageBackground, isRTL } = c;
     const s = this.plugin.settings;
     this.previewEl.empty();
 
@@ -1471,6 +1492,7 @@ class PDFExportModal extends Modal {
       // ── Content ──────────────────────────────────────────────────────────────
       const contentDiv = document.createElement("div");
       contentDiv.className = "mpdf-doc";
+      if (isRTL) contentDiv.setAttribute("dir", "rtl");
       // No height/overflow:hidden — the :host clips at the page boundary.
       // A second clip here caused bottom lines to vanish in preview due to
       // sub-pixel differences between the light-DOM paginator sandbox and
@@ -1568,7 +1590,7 @@ class PDFExportModal extends Modal {
       return;
     }
 
-    const { layouts, pw, ph, mTop, mLeft, footerH, headerH, contentW, docCSS, fontFamily, accentColor: exportAccent, pageBackground } = cache;
+    const { layouts, pw, ph, mTop, mLeft, footerH, headerH, contentW, docCSS, fontFamily, accentColor: exportAccent, pageBackground, isRTL } = cache;
 
     const pageHTMLParts = layouts.map((layout) => {
       const contentHTML = layout.pageNodes.map((n) => n.outerHTML).join("\n");
@@ -1591,7 +1613,7 @@ class PDFExportModal extends Modal {
         ? `<div style="position:absolute;bottom:0;left:0;right:0;height:${footerH}px;display:flex;align-items:center;${footerBorder}padding:0 ${mLeft}px;font-size:9px;color:#aaa;font-family:${fontFamily};">${footerInnerHTML}</div>`
         : "";
 
-      const contentDivHTML = `<div class="mpdf-doc" style="position:absolute;top:${mTop + headerH}px;left:${mLeft}px;width:${contentW}px;">${contentHTML}</div>`;
+      const contentDivHTML = `<div class="mpdf-doc"${isRTL ? ' dir="rtl"' : ''} style="position:absolute;top:${mTop + headerH}px;left:${mLeft}px;width:${contentW}px;">${contentHTML}</div>`;
 
       return `<div class="mpdf-export-page">${headerHTML}${contentDivHTML}${footerHTML}</div>`;
     });
