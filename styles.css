@@ -1,7 +1,5 @@
 /* Advanced PDF Export — plugin styles */
 
-/* Modal sizing */
-
 .mpdf-modal {
   width: 96vw;
   max-width: 1800px;
@@ -18,7 +16,7 @@
   flex-direction: column;
 }
 
-/* Top bar — three-section flex layout: controls | title | actions */
+/* Topbar */
 .mpdf-topbar {
   display: flex;
   align-items: center;
@@ -31,7 +29,6 @@
   overflow: hidden;
 }
 
-/* Left group: style/size/zoom controls */
 .mpdf-topbar-left {
   display: flex;
   align-items: center;
@@ -40,7 +37,6 @@
   min-width: 0;
 }
 
-/* Centered note title */
 .mpdf-topbar-title {
   flex-shrink: 0;
   max-width: 28%;
@@ -55,7 +51,6 @@
   opacity: 0.85;
 }
 
-/* Right group: page count + action buttons */
 .mpdf-topbar-right {
   display: flex;
   align-items: center;
@@ -65,7 +60,6 @@
   justify-content: flex-end;
 }
 
-/* Control group (label + input) */
 .mpdf-ctrl {
   display: flex;
   align-items: center;
@@ -135,7 +129,6 @@
   height: 16px;
 }
 
-/* Disabled state — used while rendering or exporting */
 .mpdf-btn:disabled,
 .mpdf-btn-primary:disabled {
   opacity: 0.55;
@@ -157,7 +150,6 @@
   overflow: hidden;
 }
 
-/* Editor panel */
 .mpdf-editor-panel {
   display: flex;
   flex-direction: column;
@@ -168,7 +160,6 @@
   flex-shrink: 0;
 }
 
-/* Editor textarea */
 .mpdf-editor {
   flex: 1;
   background: transparent;
@@ -187,8 +178,7 @@
   color: var(--text-faint);
 }
 
-/* Preview container — wraps the scrollable preview and the non-scrolling
-   loading overlay as siblings so the overlay never scrolls with the pages. */
+/* Keeps the loading overlay as a non-scrolling sibling of .mpdf-preview. */
 .mpdf-preview-container {
   flex: 1;
   position: relative;
@@ -197,7 +187,6 @@
   flex-direction: column;
 }
 
-/* Preview panel */
 .mpdf-preview {
   flex: 1;
   background: var(--background-secondary-alt, #2a2a30);
@@ -209,8 +198,6 @@
   gap: 24px;
 }
 
-/* Loading overlay — sits on top of the preview, hidden by default.
-   Shown (display:flex) whenever a render or initial open is in progress. */
 .mpdf-loading-overlay {
   position: absolute;
   inset: 0;
@@ -247,7 +234,7 @@
   letter-spacing: 0.02em;
 }
 
-/* Page wrapper — width/height set inline to match the scaled page footprint */
+/* width/height set inline to match the scaled page footprint */
 .mpdf-page-wrap {
   position: relative;
   flex-shrink: 0;
@@ -263,19 +250,13 @@
   white-space: nowrap;
 }
 
-/* Clips the scaled shadow-host page to its visual footprint — width/height set inline */
+/* Clips the shadow-host to the scaled footprint; width/height set inline. */
 .mpdf-page-scale {
   overflow: hidden;
   position: relative;
 }
 
-/* .mpdf-page no longer exists as a light-DOM element.
-   Each preview page is now a Shadow DOM host; its background, box-shadow,
-   and dimensions are declared via :host {} inside the per-page shadow stylesheet
-   that drawPreview() generates from the active preset's values. */
-
-/* Zoom slider in the topbar — width and accent colour kept in CSS so the
-   inline style can be dropped from main.ts. */
+/* width/accent kept in CSS to avoid inline styles in JS */
 .mpdf-zoom-slider {
   width: 64px;
   accent-color: var(--interactive-accent);
