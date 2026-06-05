@@ -288,12 +288,8 @@ function escapeHTML(s: string): string {
     .replace(/"/g, "&quot;");
 }
 
-/**
- * Returns true when the text contains a meaningful proportion of RTL script
- * characters (Arabic, Hebrew, Persian, Syriac, Thaana, NKo, etc.).
- * We count RTL vs total directional characters rather than testing a single
- * char so mixed documents lean toward the dominant script.
- */
+/** True when RTL script chars (Arabic, Hebrew, etc.) exceed 10 % of all
+ *  alpha chars — ratio-based so mixed-script notes lean toward the majority. */
 const RTL_CHARS   = /[\u0590-\u08FF\uFB1D-\uFDFD\uFE70-\uFEFC]/g;
 const TOTAL_ALPHA = /[A-Za-z\u0590-\u08FF\uFB1D-\uFDFD\uFE70-\uFEFC]/g;
 function isRTLContent(text: string): boolean {
