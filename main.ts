@@ -273,7 +273,7 @@ const DEFAULT_SETTINGS: PDFExportSettings = {
   autoBreakH1: false,
   autoBreakH2: false,
   includeFilenameAsTitle: false,
-  previewScale: 1.00,
+  previewScale: 0.90,
 };
 
 // ─── Utilities ────────────────────────────────────────────────────────────────
