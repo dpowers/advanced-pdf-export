@@ -870,13 +870,17 @@ function paginateHTML(
     "visibility:hidden", "pointer-events:none", "z-index:-1",
   ].join(";");
 
-  const styleEl = document.createElement("style");
-  styleEl.textContent = docCSS;
-  sandbox.appendChild(styleEl);
+  // Inject doc CSS via adoptedStyleSheets to avoid creating a <style> element.
+  const docSheet = new CSSStyleSheet();
+  docSheet.replaceSync(docCSS);
+  const prevSheets = [...document.adoptedStyleSheets];
+  document.adoptedStyleSheets = [...prevSheets, docSheet];
 
   const inner = document.createElement("div");
   inner.className = "mpdf-doc";
-  inner.innerHTML = html;
+  // Use DOMParser to safely parse the rendered HTML instead of innerHTML.
+  const parsed = new DOMParser().parseFromString(html, "text/html");
+  Array.from(parsed.body.childNodes).forEach((n) => inner.appendChild(document.importNode(n, true)));
   sandbox.appendChild(inner);
 
   // Measurement div: same width, always empty before each measurement.
@@ -939,6 +943,7 @@ function paginateHTML(
     if (currentPage.length > 0) pages.push(currentPage);
   } finally {
     document.body.removeChild(sandbox);
+    document.adoptedStyleSheets = prevSheets;
   }
   return pages.length > 0 ? pages : [[]];
 }
@@ -1061,7 +1066,7 @@ function resolveActiveMarkdownFile(app: App, initialFile?: TFile | null): TFile 
   if (activeFile?.extension === "md") return activeFile;
 
   const leaf = app.workspace.getMostRecentLeaf();
-  if (leaf?.view instanceof MarkdownView) return (leaf.view as MarkdownView).file ?? null;
+  if (leaf?.view instanceof MarkdownView) return leaf.view.file ?? null;
 
   return null;
 }
@@ -1086,7 +1091,7 @@ class PDFExportModal extends Modal {
   private renderToken = 0;
   private layoutCache: LayoutCache | null = null;
   // Debounce handle for settings-driven re-renders; cleared on close.
-  private renderDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+  private renderDebounceTimer: number | null = null;
 
   constructor(app: App, plugin: MarkdownPDFPlugin, file?: TFile) {
     super(app);
@@ -1110,14 +1115,14 @@ class PDFExportModal extends Modal {
       this.noteTitleEl.title = file.path;
       this.showLoading();
       // Two rAFs let the browser paint the modal before pagination starts.
-      await new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())));
+      await new Promise<void>((r) => window.requestAnimationFrame(() => window.requestAnimationFrame(() => r())));
       this.render(true);
     }
   }
 
   onClose() {
     if (this.renderDebounceTimer !== null) {
-      clearTimeout(this.renderDebounceTimer);
+      window.clearTimeout(this.renderDebounceTimer);
       this.renderDebounceTimer = null;
     }
     this.renderComponent.unload();
@@ -1150,7 +1155,6 @@ class PDFExportModal extends Modal {
     this.previewEl = previewContainer.createEl("div", { cls: "mpdf-preview" });
 
     this.loadingOverlayEl = previewContainer.createEl("div", { cls: "mpdf-loading-overlay" });
-    this.loadingOverlayEl.style.display = "none";
     this.loadingOverlayEl.createEl("div", { cls: "mpdf-spinner" });
     this.loadingOverlayEl.createEl("span", { cls: "mpdf-loading-text", text: "Rendering…" });
 
@@ -1264,7 +1268,7 @@ class PDFExportModal extends Modal {
   render(immediate = false) {
     const token = ++this.renderToken;
     if (this.renderDebounceTimer !== null) {
-      clearTimeout(this.renderDebounceTimer);
+      window.clearTimeout(this.renderDebounceTimer);
       this.renderDebounceTimer = null;
     }
     this.showLoading();
@@ -1280,11 +1284,11 @@ class PDFExportModal extends Modal {
     if (immediate) {
       // Two rAFs: first fires before paint, second after — ensures the spinner
       // renders before the synchronous pagination work blocks the thread.
-      requestAnimationFrame(() => requestAnimationFrame(() => void safeDo()));
+      window.requestAnimationFrame(() => window.requestAnimationFrame(() => void safeDo()));
     } else {
-      this.renderDebounceTimer = setTimeout(() => {
+      this.renderDebounceTimer = window.setTimeout(() => {
         this.renderDebounceTimer = null;
-        requestAnimationFrame(() => requestAnimationFrame(() => void safeDo()));
+        window.requestAnimationFrame(() => window.requestAnimationFrame(() => void safeDo()));
       }, 150);
     }
   }
@@ -1388,13 +1392,13 @@ class PDFExportModal extends Modal {
   }
 
   private showLoading() {
-    this.loadingOverlayEl.style.display = "flex";
+    this.loadingOverlayEl.addClass("mpdf-loading-overlay--visible");
     this.renderBtn.disabled = true;
     this.renderBtn.textContent = "Rendering…";
   }
 
   private hideLoading() {
-    this.loadingOverlayEl.style.display = "none";
+    this.loadingOverlayEl.removeClass("mpdf-loading-overlay--visible");
     this.renderBtn.disabled = false;
     this.renderBtn.textContent = "⟳ Render PDF";
   }
@@ -1442,8 +1446,9 @@ class PDFExportModal extends Modal {
 
       const shadow = shadowHost.attachShadow({ mode: "open" });
 
-      const styleEl = document.createElement("style");
-      styleEl.textContent = `
+      // Inject shadow CSS via adoptedStyleSheets to avoid creating a <style> element.
+      // Classes mpdf-hf-center / mpdf-hf-end are used by header and footer spans.
+      const shadowCSSText = `
         :host {
           display: block;
           width: ${pw}px;
@@ -1455,9 +1460,13 @@ class PDFExportModal extends Modal {
           box-sizing: border-box;
         }
         *, *::before, *::after { box-sizing: border-box; }
+        .mpdf-hf-center { flex: 1; text-align: center; }
+        .mpdf-hf-end { margin-left: auto; }
         ${docCSS}
       `;
-      shadow.appendChild(styleEl);
+      const shadowSheet = new CSSStyleSheet();
+      shadowSheet.replaceSync(shadowCSSText);
+      shadow.adoptedStyleSheets = [shadowSheet];
 
       // ── Header ───────────────────────────────────────────────────────────────
       const hasHeader = s.showHeader && (layout.headerLeft || layout.headerCenter || layout.headerRight);
@@ -1470,7 +1479,7 @@ class PDFExportModal extends Modal {
         ].join(";");
         if (layout.headerCenter) {
           const span = document.createElement("span");
-          span.style.cssText = "flex:1;text-align:center;";
+          span.className = "mpdf-hf-center";
           span.textContent = layout.headerCenter;
           hdr.appendChild(span);
         } else {
@@ -1478,7 +1487,7 @@ class PDFExportModal extends Modal {
           leftSpan.textContent = layout.headerLeft;
           hdr.appendChild(leftSpan);
           const rightSpan = document.createElement("span");
-          rightSpan.style.marginLeft = "auto";
+          rightSpan.className = "mpdf-hf-end";
           rightSpan.textContent = layout.headerRight;
           hdr.appendChild(rightSpan);
         }
@@ -1527,7 +1536,7 @@ class PDFExportModal extends Modal {
 
         if (layout.footerCenter) {
           const span = document.createElement("span");
-          span.style.cssText = "flex:1;text-align:center;";
+          span.className = "mpdf-hf-center";
           span.textContent = layout.footerCenter;
           footer.appendChild(span);
         } else {
@@ -1535,7 +1544,7 @@ class PDFExportModal extends Modal {
           left.textContent = layout.footerLeft;
           footer.appendChild(left);
           const right = document.createElement("span");
-          right.style.marginLeft = "auto";
+          right.className = "mpdf-hf-end";
           right.textContent = layout.footerRight;
           footer.appendChild(right);
         }
@@ -1563,7 +1572,7 @@ class PDFExportModal extends Modal {
     if (!this.layoutCache) {
       // Cancel any pending debounced render — this export render supersedes it.
       if (this.renderDebounceTimer !== null) {
-        clearTimeout(this.renderDebounceTimer);
+        window.clearTimeout(this.renderDebounceTimer);
         this.renderDebounceTimer = null;
       }
       const token = ++this.renderToken;
@@ -1761,10 +1770,10 @@ class PDFExportSettingTab extends PluginSettingTab {
     containerEl.empty();
     const s = this.plugin.settings;
 
-    containerEl.createEl("h2", { text: "Advanced PDF Export" });
+    new Setting(containerEl).setName("Advanced PDF Export").setHeading();
 
     // ── Style Preset ──────────────────────────────────────────────────────────
-    containerEl.createEl("h3", { text: "Style Preset" });
+    new Setting(containerEl).setName("Style Preset").setHeading();
     new Setting(containerEl)
       .setName("Preset")
       .setDesc("Pick a preset to configure the overall document style. Fine-tune any setting below.")
@@ -1789,7 +1798,7 @@ class PDFExportSettingTab extends PluginSettingTab {
       );
 
     // ── Page ──────────────────────────────────────────────────────────────────
-    containerEl.createEl("h3", { text: "Page" });
+    new Setting(containerEl).setName("Page").setHeading();
     new Setting(containerEl).setName("Page size").addDropdown((d) => {
       Object.keys(PAGE_SIZES).forEach((k) => d.addOption(k, k));
       d.setValue(s.pageSize).onChange(async (v) => {
@@ -1807,11 +1816,11 @@ class PDFExportSettingTab extends PluginSettingTab {
     );
 
     // ── Margins ───────────────────────────────────────────────────────────────
-    containerEl.createEl("h3", { text: "Margins (mm)" });
+    new Setting(containerEl).setName("Margins (mm)").setHeading();
     const marginSetting = (name: string, key: keyof PDFExportSettings) =>
       new Setting(containerEl).setName(name).addText((t) =>
         t.setValue(String(s[key])).onChange(async (v) => {
-          (s as any)[key] = parseInt(v) || 0;
+          Object.assign(s, { [key]: parseInt(v) || 0 });
           await this.markDirty();
         }),
       );
@@ -1821,7 +1830,7 @@ class PDFExportSettingTab extends PluginSettingTab {
     marginSetting("Right",  "marginRight");
 
     // ── Typography ────────────────────────────────────────────────────────────
-    containerEl.createEl("h3", { text: "Typography" });
+    new Setting(containerEl).setName("Typography").setHeading();
     let customFontSetting: Setting;
     new Setting(containerEl).setName("Font family").addDropdown((d) =>
       d.addOptions({
@@ -1881,11 +1890,11 @@ class PDFExportSettingTab extends PluginSettingTab {
       );
 
     // ── Colors ────────────────────────────────────────────────────────────────
-    containerEl.createEl("h3", { text: "Colors" });
+    new Setting(containerEl).setName("Colors").setHeading();
     const colorSetting = (name: string, key: keyof PDFExportSettings) =>
       new Setting(containerEl).setName(name).addColorPicker((cp) =>
         cp.setValue(String(s[key])).onChange(async (v) => {
-          (s as any)[key] = v;
+          Object.assign(s, { [key]: v });
           await this.markDirty();
         }),
       );
@@ -1899,7 +1908,7 @@ class PDFExportSettingTab extends PluginSettingTab {
     colorSetting("Code background",         "codeBackground");
 
     // ── Heading style ─────────────────────────────────────────────────────────
-    containerEl.createEl("h3", { text: "Heading Style" });
+    new Setting(containerEl).setName("Heading Style").setHeading();
     new Setting(containerEl).setName("H1 bottom border").addToggle((t) =>
       t.setValue(s.h1BorderBottom).onChange(async (v) => { s.h1BorderBottom = v; await this.markDirty(); }),
     );
@@ -1911,13 +1920,13 @@ class PDFExportSettingTab extends PluginSettingTab {
     );
 
     // ── Tables ────────────────────────────────────────────────────────────────
-    containerEl.createEl("h3", { text: "Tables" });
+    new Setting(containerEl).setName("Tables").setHeading();
     new Setting(containerEl).setName("Striped rows").addToggle((t) =>
       t.setValue(s.tableStriped).onChange(async (v) => { s.tableStriped = v; await this.markDirty(); }),
     );
 
     // ── Header & Footer ───────────────────────────────────────────────────────
-    containerEl.createEl("h3", { text: "Header & Footer" });
+    new Setting(containerEl).setName("Header & Footer").setHeading();
     new Setting(containerEl).setName("Show header").addToggle((t) =>
       t.setValue(s.showHeader).onChange(async (v) => { s.showHeader = v; await this.markDirty(); }),
     );
@@ -1969,7 +1978,7 @@ class PDFExportSettingTab extends PluginSettingTab {
       );
 
     // ── Behaviour ─────────────────────────────────────────────────────────────
-    containerEl.createEl("h3", { text: "Behaviour" });
+    new Setting(containerEl).setName("Behaviour").setHeading();
     new Setting(containerEl)
       .setName("Hide frontmatter")
       .setDesc("Strip the YAML frontmatter block (--- … ---) from the preview and exported PDF.")
