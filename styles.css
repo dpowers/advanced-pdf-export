@@ -213,7 +213,7 @@
   pointer-events: none; /* let clicks through to cancel/settings while loading */
 }
 
-.mpdf-loading-overlay--visible {
+.mpdf-loading-overlay.is-active {
   display: flex;
 }
 
@@ -264,4 +264,17 @@
 .mpdf-zoom-slider {
   width: 64px;
   accent-color: var(--interactive-accent);
+}
+
+/* Utility: toggle visibility without affecting layout flow */
+.is-hidden {
+  display: none !important;
+}
+
+/* Static positioning for the per-page shadow-DOM host; width/height/transform set inline */
+.mpdf-shadow-host {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform-origin: top left;
 }

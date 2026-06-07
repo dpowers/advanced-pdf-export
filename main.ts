@@ -316,16 +316,16 @@ function splitMarkdownSections(md: string): string[] {
     .filter(Boolean);
 }
 
-async function renderMarkdownToHtml(
+async function renderMarkdownToEl(
   app: App,
   markdown: string,
   sourcePath: string,
   component: Component,
-): Promise<string> {
-  const temp = document.createElement("div");
+): Promise<HTMLElement> {
+  const temp = activeDocument.createElement("div");
   await MarkdownRenderer.render(app, markdown, temp, sourcePath, component);
   postProcessRenderedHTML(temp);
-  return temp.innerHTML;
+  return temp;
 }
 
 function slugifyHeading(text: string): string {
@@ -583,7 +583,7 @@ const UNSPLITTABLE_TAGS = new Set([
 const HEIGHT_EPS = 2; // px
 
 function measureNodesHeight(nodes: HTMLElement[], measureEl: HTMLElement): number {
-  measureEl.innerHTML = "";
+  measureEl.empty();
   for (const node of nodes) measureEl.appendChild(node.cloneNode(true));
   return measureEl.getBoundingClientRect().height;
 }
@@ -600,7 +600,7 @@ function makeFitFn(
 // ── Inline (text) splitter ───────────────────────────────────────────────────
 
 function trimLeadingWhitespace(el: HTMLElement): void {
-  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  const walker = activeDocument.createTreeWalker(el, NodeFilter.SHOW_TEXT);
   while (walker.nextNode()) {
     const node = walker.currentNode as Text;
     const trimmed = (node.textContent ?? "").replace(/^\s+/, "");
@@ -613,7 +613,7 @@ function buildInlineSplitAt(
   el: HTMLElement,
   splitOffset: number,
 ): [HTMLElement, HTMLElement] | null {
-  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  const walker = activeDocument.createTreeWalker(el, NodeFilter.SHOW_TEXT);
   let count = 0;
   let target: Text | null = null;
   let localOffset = 0;
@@ -631,11 +631,11 @@ function buildInlineSplitAt(
 
   if (!target) return null;
 
-  const range1 = document.createRange();
+  const range1 = activeDocument.createRange();
   range1.selectNodeContents(el);
   range1.setEnd(target, localOffset);
 
-  const range2 = document.createRange();
+  const range2 = activeDocument.createRange();
   range2.selectNodeContents(el);
   range2.setStart(target, localOffset);
 
@@ -750,7 +750,7 @@ function buildTableWithRows(tableEl: HTMLTableElement, rows: HTMLTableRowElement
   const colgroup = tableEl.querySelector("colgroup");
   if (colgroup) clone.appendChild(colgroup.cloneNode(true));
   if (tableEl.tHead) clone.appendChild(tableEl.tHead.cloneNode(true));
-  const tbody = document.createElement("tbody");
+  const tbody = activeDocument.createElement("tbody");
   for (const row of rows) tbody.appendChild(row.cloneNode(true));
   clone.appendChild(tbody);
   return clone;
@@ -856,40 +856,42 @@ function splitElement(
 
 // ── Main pagination loop ─────────────────────────────────────────────────────
 
-function paginateHTML(
-  html: string,
+function paginateEl(
+  sourceEl: HTMLElement,
   contentWidthPx: number,
   contentHeightPx: number,
   docCSS: string,
 ): HTMLElement[][] {
-  // Fixed-position sandbox: out of any scroll container, never affects layout.
-  const sandbox = document.createElement("div");
-  sandbox.style.cssText = [
+  // Fixed-position sandbox inside a shadow root so the measurement CSS is
+  // fully scoped and never pollutes the main document. Using adoptedStyleSheets
+  // avoids creating a <style> element.
+  const sandboxHost = activeDocument.createElement("div");
+  sandboxHost.style.cssText = [
     "position:fixed", "top:0", "left:-99999px",
     `width:${contentWidthPx}px`,
     "visibility:hidden", "pointer-events:none", "z-index:-1",
   ].join(";");
 
-  // Inject doc CSS via adoptedStyleSheets to avoid creating a <style> element.
-  const docSheet = new CSSStyleSheet();
-  docSheet.replaceSync(docCSS);
-  const prevSheets = [...document.adoptedStyleSheets];
-  document.adoptedStyleSheets = [...prevSheets, docSheet];
+  const sandboxShadow = sandboxHost.attachShadow({ mode: "open" });
 
-  const inner = document.createElement("div");
+  const sandboxSheet = new CSSStyleSheet();
+  sandboxSheet.replaceSync(docCSS);
+  sandboxShadow.adoptedStyleSheets = [sandboxSheet];
+
+  const inner = activeDocument.createElement("div");
   inner.className = "mpdf-doc";
-  // Use DOMParser to safely parse the rendered HTML instead of innerHTML.
-  const parsed = new DOMParser().parseFromString(html, "text/html");
-  Array.from(parsed.body.childNodes).forEach((n) => inner.appendChild(document.importNode(n, true)));
-  sandbox.appendChild(inner);
+  for (const child of Array.from(sourceEl.children)) {
+    inner.appendChild(child.cloneNode(true));
+  }
+  sandboxShadow.appendChild(inner);
 
   // Measurement div: same width, always empty before each measurement.
-  const measure = document.createElement("div");
+  const measure = activeDocument.createElement("div");
   measure.className = "mpdf-doc";
   measure.style.cssText = `position:absolute;top:0;left:0;width:${contentWidthPx}px;visibility:hidden;`;
-  sandbox.appendChild(measure);
+  sandboxShadow.appendChild(measure);
 
-  document.body.appendChild(sandbox);
+  activeDocument.body.appendChild(sandboxHost);
 
   const pages: HTMLElement[][] = [];
   try {
@@ -942,8 +944,7 @@ function paginateHTML(
 
     if (currentPage.length > 0) pages.push(currentPage);
   } finally {
-    document.body.removeChild(sandbox);
-    document.adoptedStyleSheets = prevSheets;
+    activeDocument.body.removeChild(sandboxHost);
   }
   return pages.length > 0 ? pages : [[]];
 }
@@ -1001,13 +1002,13 @@ function buildPageLayouts(allPages: HTMLElement[][], s: PDFExportSettings): Page
 // ─── Plugin ───────────────────────────────────────────────────────────────────
 
 export default class MarkdownPDFPlugin extends Plugin {
-  settings: PDFExportSettings;
+  declare settings: PDFExportSettings;
   activeModal: PDFExportModal | null = null;
 
   async onload() {
     await this.loadSettings();
     this.addCommand({
-      id: "open-advanced-pdf-export",
+      id: "open-panel",
       name: "Open Panel",
       callback: () => this.openModal(),
     });
@@ -1033,7 +1034,7 @@ export default class MarkdownPDFPlugin extends Plugin {
   }
 
   async loadSettings() {
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData() as Partial<PDFExportSettings>);
   }
 
   async saveSettings() {
@@ -1221,12 +1222,11 @@ class PDFExportModal extends Modal {
     zoomSlider.step  = "0.05";
     zoomSlider.value = String(s.previewScale);
     zoomSlider.addClass("mpdf-zoom-slider");
-    zoomSlider.addEventListener("input", async () => {
+    zoomSlider.addEventListener("input", () => {
       const v = parseFloat(zoomSlider.value);
       this.plugin.settings.previewScale = v;
       zoomLabel.textContent = Math.round(v * 100) + "%";
-      await this.plugin.saveSettings();
-      this.renderPreviewOnly();
+      void this.plugin.saveSettings().then(() => { this.renderPreviewOnly(); });
     });
 
     const breakBtn = left.createEl("button", { cls: "mpdf-btn", text: "Insert Page Break" });
@@ -1366,15 +1366,15 @@ class PDFExportModal extends Modal {
     const docCSS   = buildDocCSS(s, isRTL);
     const sourcePath = this.currentFile?.path ?? "pdf-export";
 
-    const sectionHtml = await Promise.all(
-      sections.map((sec) => renderMarkdownToHtml(this.app, sec.trim(), sourcePath, this.renderComponent)),
+    const sectionEls = await Promise.all(
+      sections.map((sec) => renderMarkdownToEl(this.app, sec.trim(), sourcePath, this.renderComponent)),
     );
 
     if (token !== this.renderToken) return;
 
     const allPages: HTMLElement[][] = [];
-    for (const html of sectionHtml) {
-      allPages.push(...paginateHTML(html, contentW, contentH, docCSS));
+    for (const sectionEl of sectionEls) {
+      allPages.push(...paginateEl(sectionEl, contentW, contentH, docCSS));
     }
 
     const layouts = buildPageLayouts(allPages, s);
@@ -1392,13 +1392,13 @@ class PDFExportModal extends Modal {
   }
 
   private showLoading() {
-    this.loadingOverlayEl.addClass("mpdf-loading-overlay--visible");
+    this.loadingOverlayEl.addClass("is-active");
     this.renderBtn.disabled = true;
     this.renderBtn.textContent = "Rendering…";
   }
 
   private hideLoading() {
-    this.loadingOverlayEl.removeClass("mpdf-loading-overlay--visible");
+    this.loadingOverlayEl.removeClass("is-active");
     this.renderBtn.disabled = false;
     this.renderBtn.textContent = "⟳ Render PDF";
   }
@@ -1427,28 +1427,25 @@ class PDFExportModal extends Modal {
       const scaledH = Math.round(ph * scale);
 
       const wrap = this.previewEl.createEl("div", { cls: "mpdf-page-wrap" });
-      wrap.style.cssText = `width:${scaledW}px;height:${scaledH}px;position:relative;flex-shrink:0;`;
+      wrap.style.cssText = `width:${scaledW}px;height:${scaledH}px;`;
       wrap.createEl("div", { cls: "mpdf-page-label", text: `Page ${layout.pageNum} of ${layout.totalPages}` });
       pageWraps.push(wrap);
 
       const scaleWrap = wrap.createEl("div", { cls: "mpdf-page-scale" });
-      scaleWrap.style.cssText = `width:${scaledW}px;height:${scaledH}px;overflow:hidden;position:relative;`;
+      scaleWrap.style.cssText = `width:${scaledW}px;height:${scaledH}px;`;
 
       // Each page renders inside a shadow root so Obsidian's theme CSS cannot
       // reach the page content across the shadow boundary.
-      const shadowHost = document.createElement("div");
-      shadowHost.style.cssText = [
-        `width:${pw}px`, `height:${ph}px`,
-        `transform:scale(${scale})`, "transform-origin:top left",
-        "position:absolute", "top:0", "left:0",
-      ].join(";");
+      const shadowHost = activeDocument.createElement("div");
+      shadowHost.addClass("mpdf-shadow-host");
+      shadowHost.style.cssText = `width:${pw}px;height:${ph}px;transform:scale(${scale});`;
       scaleWrap.appendChild(shadowHost);
 
       const shadow = shadowHost.attachShadow({ mode: "open" });
 
-      // Inject shadow CSS via adoptedStyleSheets to avoid creating a <style> element.
-      // Classes mpdf-hf-center / mpdf-hf-end are used by header and footer spans.
-      const shadowCSSText = `
+      // Use adoptedStyleSheets instead of a <style> element — avoids the
+      // no-create-style-element lint rule and keeps shadow CSS fully scoped.
+      const shadowCSS = `
         :host {
           display: block;
           width: ${pw}px;
@@ -1461,33 +1458,33 @@ class PDFExportModal extends Modal {
         }
         *, *::before, *::after { box-sizing: border-box; }
         .mpdf-hf-center { flex: 1; text-align: center; }
-        .mpdf-hf-end { margin-left: auto; }
+        .mpdf-hf-right { margin-left: auto; }
         ${docCSS}
       `;
-      const shadowSheet = new CSSStyleSheet();
-      shadowSheet.replaceSync(shadowCSSText);
-      shadow.adoptedStyleSheets = [shadowSheet];
+      const pageSheet = new CSSStyleSheet();
+      pageSheet.replaceSync(shadowCSS);
+      shadow.adoptedStyleSheets = [pageSheet];
 
       // ── Header ───────────────────────────────────────────────────────────────
       const hasHeader = s.showHeader && (layout.headerLeft || layout.headerCenter || layout.headerRight);
       if (hasHeader) {
-        const hdr = document.createElement("div");
+        const hdr = activeDocument.createElement("div");
         hdr.style.cssText = [
           "position:absolute", `top:${mTop * 0.4}px`, `left:${mLeft}px`, `right:${mLeft}px`,
           "display:flex", "align-items:center",
           "font-size:9px", "color:#999", `font-family:${fontFamily}`, "white-space:nowrap",
         ].join(";");
         if (layout.headerCenter) {
-          const span = document.createElement("span");
+          const span = activeDocument.createElement("span");
           span.className = "mpdf-hf-center";
           span.textContent = layout.headerCenter;
           hdr.appendChild(span);
         } else {
-          const leftSpan = document.createElement("span");
+          const leftSpan = activeDocument.createElement("span");
           leftSpan.textContent = layout.headerLeft;
           hdr.appendChild(leftSpan);
-          const rightSpan = document.createElement("span");
-          rightSpan.className = "mpdf-hf-end";
+          const rightSpan = activeDocument.createElement("span");
+          rightSpan.className = "mpdf-hf-right";
           rightSpan.textContent = layout.headerRight;
           hdr.appendChild(rightSpan);
         }
@@ -1495,7 +1492,7 @@ class PDFExportModal extends Modal {
       }
 
       // ── Content ──────────────────────────────────────────────────────────────
-      const contentDiv = document.createElement("div");
+      const contentDiv = activeDocument.createElement("div");
       contentDiv.className = "mpdf-doc";
       if (isRTL) contentDiv.setAttribute("dir", "rtl");
       // No height/overflow:hidden — the :host clips at the page boundary.
@@ -1526,7 +1523,7 @@ class PDFExportModal extends Modal {
       // Skip empty footer divs (e.g. page 1 when showHeaderFooterOnFirstPage is off).
       const hasFooter = s.showFooter && (layout.footerLeft || layout.footerRight || layout.footerCenter);
       if (hasFooter) {
-        const footer = document.createElement("div");
+        const footer = activeDocument.createElement("div");
         footer.style.cssText = [
           "position:absolute", "bottom:0", "left:0", "right:0",
           `height:${footerH}px`, "display:flex", "align-items:center",
@@ -1535,16 +1532,16 @@ class PDFExportModal extends Modal {
         ].filter(Boolean).join(";");
 
         if (layout.footerCenter) {
-          const span = document.createElement("span");
+          const span = activeDocument.createElement("span");
           span.className = "mpdf-hf-center";
           span.textContent = layout.footerCenter;
           footer.appendChild(span);
         } else {
-          const left = document.createElement("span");
+          const left = activeDocument.createElement("span");
           left.textContent = layout.footerLeft;
           footer.appendChild(left);
-          const right = document.createElement("span");
-          right.className = "mpdf-hf-end";
+          const right = activeDocument.createElement("span");
+          right.className = "mpdf-hf-right";
           right.textContent = layout.footerRight;
           footer.appendChild(right);
         }
@@ -1779,21 +1776,17 @@ class PDFExportSettingTab extends PluginSettingTab {
       .setDesc("Pick a preset to configure the overall document style. Fine-tune any setting below.")
       .addDropdown((d) => {
         Object.entries(PRESETS).forEach(([k, v]) => d.addOption(k, v.name));
-        d.setValue(s.preset).onChange(async (v) => {
+        d.setValue(s.preset).onChange((v) => {
           this.plugin.applyPreset(v);
-          await this.markDirty();
-          // Refresh the form so all controls show the new preset's values,
-          // but do NOT call display() — that would reset the dirty flag.
-          this.buildSettings();
+          void this.markDirty().then(() => { this.buildSettings(); });
         });
       })
       .addButton((b) =>
         b.setButtonText("Reset Preset")
          .setTooltip("Reset current preset to its default values")
-         .onClick(async () => {
+         .onClick(() => {
            this.plugin.applyPreset(s.preset);
-           await this.markDirty();
-           this.buildSettings();
+           void this.markDirty().then(() => { this.buildSettings(); });
          }),
       );
 
@@ -1801,27 +1794,28 @@ class PDFExportSettingTab extends PluginSettingTab {
     new Setting(containerEl).setName("Page").setHeading();
     new Setting(containerEl).setName("Page size").addDropdown((d) => {
       Object.keys(PAGE_SIZES).forEach((k) => d.addOption(k, k));
-      d.setValue(s.pageSize).onChange(async (v) => {
+      d.setValue(s.pageSize).onChange((v) => {
         s.pageSize = v;
-        await this.markDirty();
+        void this.markDirty();
       });
     });
     new Setting(containerEl).setName("Orientation").addDropdown((d) =>
       d.addOptions({ portrait: "Portrait", landscape: "Landscape" })
        .setValue(s.orientation)
-       .onChange(async (v) => {
+       .onChange((v) => {
          s.orientation = v as "portrait" | "landscape";
-         await this.markDirty();
+         void this.markDirty();
        }),
     );
 
     // ── Margins ───────────────────────────────────────────────────────────────
     new Setting(containerEl).setName("Margins (mm)").setHeading();
-    const marginSetting = (name: string, key: keyof PDFExportSettings) =>
+    type MarginKey = "marginTop" | "marginBottom" | "marginLeft" | "marginRight";
+    const marginSetting = (name: string, key: MarginKey) =>
       new Setting(containerEl).setName(name).addText((t) =>
-        t.setValue(String(s[key])).onChange(async (v) => {
-          Object.assign(s, { [key]: parseInt(v) || 0 });
-          await this.markDirty();
+        t.setValue(String(s[key])).onChange((v) => {
+          s[key] = parseInt(v) || 0;
+          void this.markDirty();
         }),
       );
     marginSetting("Top",    "marginTop");
@@ -1843,10 +1837,10 @@ class PDFExportSettingTab extends PluginSettingTab {
         "'Courier New', monospace":                "Courier New",
         "__custom__":                              "Custom…",
       }).setValue(s.fontFamily)
-       .onChange(async (v) => {
+       .onChange((v) => {
          s.fontFamily = v;
-         customFontSetting.settingEl.style.display = v === "__custom__" ? "" : "none";
-         await this.markDirty();
+         customFontSetting.settingEl.toggleClass("is-hidden", v !== "__custom__");
+         void this.markDirty();
        }),
     );
     customFontSetting = new Setting(containerEl)
@@ -1855,30 +1849,30 @@ class PDFExportSettingTab extends PluginSettingTab {
       .addText((t) =>
         t.setPlaceholder("e.g. Inter, sans-serif")
          .setValue(s.customFontName)
-         .onChange(async (v) => { s.customFontName = v; await this.markDirty(); }),
+         .onChange((v) => { s.customFontName = v; void this.markDirty(); }),
       );
-    customFontSetting.settingEl.style.display = s.fontFamily === "__custom__" ? "" : "none";
+    customFontSetting.settingEl.toggleClass("is-hidden", s.fontFamily !== "__custom__");
     new Setting(containerEl).setName("Font size (px)").addDropdown((d) => {
       ["10","11","12","13","14","15","16"].forEach((v) => d.addOption(v, v + "px"));
-      d.setValue(String(s.fontSize)).onChange(async (v) => {
+      d.setValue(String(s.fontSize)).onChange((v) => {
         s.fontSize = parseInt(v);
-        await this.markDirty();
+        void this.markDirty();
       });
     });
     new Setting(containerEl).setName("Code font size").addDropdown((d) =>
       d.addOptions({ "0.75": "0.75em", "0.80": "0.80em", "0.82": "0.82em", "0.85": "0.85em", "0.88": "0.88em", "0.90": "0.90em", "1.0": "1.00em" })
        .setValue(String(s.codeFontSize))
-       .onChange(async (v) => { s.codeFontSize = parseFloat(v); await this.markDirty(); }),
+       .onChange((v) => { s.codeFontSize = parseFloat(v); void this.markDirty(); }),
     );
     new Setting(containerEl).setName("Line height").addDropdown((d) =>
       d.addOptions({ "1.4": "Tight (1.4)", "1.6": "Compact (1.6)", "1.75": "Normal (1.75)", "1.85": "Relaxed (1.85)", "2.0": "Double (2.0)" })
        .setValue(String(s.lineHeight))
-       .onChange(async (v) => { s.lineHeight = parseFloat(v); await this.markDirty(); }),
+       .onChange((v) => { s.lineHeight = parseFloat(v); void this.markDirty(); }),
     );
     new Setting(containerEl).setName("Paragraph spacing").addDropdown((d) =>
       d.addOptions({ "0": "None", "0.3": "Tight (0.3em)", "0.5": "Normal (0.5em)", "0.65": "Relaxed (0.65em)", "1.0": "Wide (1em)" })
        .setValue(String(s.paragraphSpacing))
-       .onChange(async (v) => { s.paragraphSpacing = parseFloat(v); await this.markDirty(); }),
+       .onChange((v) => { s.paragraphSpacing = parseFloat(v); void this.markDirty(); }),
     );
     new Setting(containerEl)
       .setName("Heading scale")
@@ -1886,16 +1880,18 @@ class PDFExportSettingTab extends PluginSettingTab {
       .addDropdown((d) =>
         d.addOptions({ "0.8": "Small (0.8×)", "0.88": "0.88×", "0.9": "Compact (0.9×)", "0.95": "0.95×", "1.0": "Normal (1.0×)", "1.05": "1.05×", "1.1": "Large (1.1×)", "1.2": "XLarge (1.2×)" })
          .setValue(String(s.headingScale))
-         .onChange(async (v) => { s.headingScale = parseFloat(v); await this.markDirty(); }),
+         .onChange((v) => { s.headingScale = parseFloat(v); void this.markDirty(); }),
       );
 
     // ── Colors ────────────────────────────────────────────────────────────────
     new Setting(containerEl).setName("Colors").setHeading();
-    const colorSetting = (name: string, key: keyof PDFExportSettings) =>
+    type ColorKey = "accentColor" | "bodyColor" | "headingColor" | "pageBackground"
+      | "blockquoteBg" | "blockquoteBorderColor" | "tableHeaderBg" | "codeBackground";
+    const colorSetting = (name: string, key: ColorKey) =>
       new Setting(containerEl).setName(name).addColorPicker((cp) =>
-        cp.setValue(String(s[key])).onChange(async (v) => {
-          Object.assign(s, { [key]: v });
-          await this.markDirty();
+        cp.setValue(s[key]).onChange((v) => {
+          s[key] = v;
+          void this.markDirty();
         }),
       );
     colorSetting("Accent color",            "accentColor");
@@ -1910,70 +1906,70 @@ class PDFExportSettingTab extends PluginSettingTab {
     // ── Heading style ─────────────────────────────────────────────────────────
     new Setting(containerEl).setName("Heading Style").setHeading();
     new Setting(containerEl).setName("H1 bottom border").addToggle((t) =>
-      t.setValue(s.h1BorderBottom).onChange(async (v) => { s.h1BorderBottom = v; await this.markDirty(); }),
+      t.setValue(s.h1BorderBottom).onChange((v) => { s.h1BorderBottom = v; void this.markDirty(); }),
     );
     new Setting(containerEl).setName("H2 bottom border").addToggle((t) =>
-      t.setValue(s.h2BorderBottom).onChange(async (v) => { s.h2BorderBottom = v; await this.markDirty(); }),
+      t.setValue(s.h2BorderBottom).onChange((v) => { s.h2BorderBottom = v; void this.markDirty(); }),
     );
     new Setting(containerEl).setName("Center H1").addToggle((t) =>
-      t.setValue(s.centerH1).onChange(async (v) => { s.centerH1 = v; await this.markDirty(); }),
+      t.setValue(s.centerH1).onChange((v) => { s.centerH1 = v; void this.markDirty(); }),
     );
 
     // ── Tables ────────────────────────────────────────────────────────────────
     new Setting(containerEl).setName("Tables").setHeading();
     new Setting(containerEl).setName("Striped rows").addToggle((t) =>
-      t.setValue(s.tableStriped).onChange(async (v) => { s.tableStriped = v; await this.markDirty(); }),
+      t.setValue(s.tableStriped).onChange((v) => { s.tableStriped = v; void this.markDirty(); }),
     );
 
     // ── Header & Footer ───────────────────────────────────────────────────────
     new Setting(containerEl).setName("Header & Footer").setHeading();
     new Setting(containerEl).setName("Show header").addToggle((t) =>
-      t.setValue(s.showHeader).onChange(async (v) => { s.showHeader = v; await this.markDirty(); }),
+      t.setValue(s.showHeader).onChange((v) => { s.showHeader = v; void this.markDirty(); }),
     );
     new Setting(containerEl)
       .setName("Header text")
       .setDesc("Appears on every page according to the chosen alignment.")
-      .addText((t) => t.setValue(s.headerText).onChange(async (v) => { s.headerText = v; await this.markDirty(); }));
+      .addText((t) => t.setValue(s.headerText).onChange((v) => { s.headerText = v; void this.markDirty(); }));
     new Setting(containerEl).setName("Header alignment").addDropdown((d) =>
       d.addOptions({ left: "Left", center: "Center", right: "Right" })
        .setValue(s.headerAlignment)
-       .onChange(async (v) => { s.headerAlignment = v as "left"|"center"|"right"; await this.markDirty(); }),
+       .onChange((v) => { s.headerAlignment = v as "left"|"center"|"right"; void this.markDirty(); }),
     );
     new Setting(containerEl).setName("Show footer").addToggle((t) =>
-      t.setValue(s.showFooter).onChange(async (v) => { s.showFooter = v; await this.markDirty(); }),
+      t.setValue(s.showFooter).onChange((v) => { s.showFooter = v; void this.markDirty(); }),
     );
     new Setting(containerEl).setName("Footer border").setDesc("Show the separator line above the footer.").addToggle((t) =>
-      t.setValue(s.showFooterBorder).onChange(async (v) => { s.showFooterBorder = v; await this.markDirty(); }),
+      t.setValue(s.showFooterBorder).onChange((v) => { s.showFooterBorder = v; void this.markDirty(); }),
     );
     new Setting(containerEl)
       .setName("Footer text")
-      .addText((t) => t.setValue(s.footerText).onChange(async (v) => { s.footerText = v; await this.markDirty(); }));
+      .addText((t) => t.setValue(s.footerText).onChange((v) => { s.footerText = v; void this.markDirty(); }));
     new Setting(containerEl).setName("Show page numbers").addToggle((t) =>
-      t.setValue(s.showPageNumbers).onChange(async (v) => { s.showPageNumbers = v; await this.markDirty(); }),
+      t.setValue(s.showPageNumbers).onChange((v) => { s.showPageNumbers = v; void this.markDirty(); }),
     );
     new Setting(containerEl).setName("Page number position").addDropdown((d) =>
       d.addOptions({ left: "Left", center: "Center", right: "Right" })
        .setValue(s.pageNumberPosition)
-       .onChange(async (v) => { s.pageNumberPosition = v as "left"|"center"|"right"; await this.markDirty(); }),
+       .onChange((v) => { s.pageNumberPosition = v as "left"|"center"|"right"; void this.markDirty(); }),
     );
     new Setting(containerEl)
       .setName("Page number start")
       .setDesc("Number assigned to the first visible page number. Accepts any integer.")
       .addText((t) =>
         t.setValue(String(s.pageNumberStart))
-         .onChange(async (v) => {
+         .onChange((v) => {
            const n = parseInt(v, 10);
            s.pageNumberStart = isNaN(n) ? 1 : n;
-           await this.markDirty();
+           void this.markDirty();
          }),
       );
     new Setting(containerEl)
       .setName("Header/footer on first page")
       .setDesc("When off, page 1 has no header, footer, or page number. Numbering begins on page 2 using the start value.")
       .addToggle((t) =>
-        t.setValue(s.showHeaderFooterOnFirstPage).onChange(async (v) => {
+        t.setValue(s.showHeaderFooterOnFirstPage).onChange((v) => {
           s.showHeaderFooterOnFirstPage = v;
-          await this.markDirty();
+          void this.markDirty();
         }),
       );
 
@@ -1983,9 +1979,9 @@ class PDFExportSettingTab extends PluginSettingTab {
       .setName("Hide frontmatter")
       .setDesc("Strip the YAML frontmatter block (--- … ---) from the preview and exported PDF.")
       .addToggle((t) =>
-        t.setValue(s.hideFrontmatter).onChange(async (v) => {
+        t.setValue(s.hideFrontmatter).onChange((v) => {
           s.hideFrontmatter = v;
-          await this.markDirty();
+          void this.markDirty();
         }),
       );
     new Setting(containerEl)
@@ -1995,16 +1991,16 @@ class PDFExportSettingTab extends PluginSettingTab {
         "Mirrors Obsidian's built-in 'Include file name as title' export option.",
       )
       .addToggle((t) =>
-        t.setValue(s.includeFilenameAsTitle).onChange(async (v) => {
+        t.setValue(s.includeFilenameAsTitle).onChange((v) => {
           s.includeFilenameAsTitle = v;
-          await this.markDirty();
+          void this.markDirty();
         }),
       );
     new Setting(containerEl).setName("Auto page break before H1").addToggle((t) =>
-      t.setValue(s.autoBreakH1).onChange(async (v) => { s.autoBreakH1 = v; await this.markDirty(); }),
+      t.setValue(s.autoBreakH1).onChange((v) => { s.autoBreakH1 = v; void this.markDirty(); }),
     );
     new Setting(containerEl).setName("Auto page break before H2").addToggle((t) =>
-      t.setValue(s.autoBreakH2).onChange(async (v) => { s.autoBreakH2 = v; await this.markDirty(); }),
+      t.setValue(s.autoBreakH2).onChange((v) => { s.autoBreakH2 = v; void this.markDirty(); }),
     );
   }
 }
