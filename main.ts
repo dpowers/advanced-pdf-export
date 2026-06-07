@@ -41,6 +41,18 @@ interface DocStyle {
   marginRight: number;  // mm
 }
 
+interface ElectronBridge {
+  require(module: string): any;
+}
+
+interface AppWithSettings {
+  setting?: {
+    open?: () => void;
+    openTabById?: (id: string) => void;
+  };
+}
+
+
 interface PDFExportSettings extends DocStyle {
   pageSize: string;
   orientation: "portrait" | "landscape";
@@ -1239,7 +1251,7 @@ class PDFExportModal extends Modal {
     settingsBtn.setAttr("aria-label", "Open Advanced PDF Export settings");
     setIcon(settingsBtn, "settings");
     settingsBtn.addEventListener("click", () => {
-      const settings = (this.app as any).setting;
+      const settings = (this.app as App & AppWithSettings).setting;
       settings?.open?.();
       settings?.openTabById?.("advanced-pdf-export");
     });
@@ -1655,7 +1667,8 @@ ${pageHTMLParts.join("\n")}
       // `electron.remote || electron` silently used the plain `electron` object
       // which has no `dialog` or `BrowserWindow` in the renderer process,
       // causing every export to fail with the wrong error message.
-      const remote = (window as any).require("@electron/remote");
+      const electron = window as unknown as ElectronBridge;
+      const remote = electron.require("@electron/remote");
       if (!remote?.dialog) throw new Error("no remote");
 
       const res: { canceled: boolean; filePath?: string } = await remote.dialog.showSaveDialog({
@@ -1694,7 +1707,7 @@ ${pageHTMLParts.join("\n")}
         win.webContents
           .printToPDF({ pageSize: s.pageSize, landscape: s.orientation === "landscape", printBackground: true, margins: { marginType: "none" } })
           .then((data: Buffer) => {
-            (window as any).require("fs").writeFile(res.filePath!, data, (err: Error | null) => {
+            electron.require("fs").writeFile(res.filePath!, data, (err: Error | null) => {
               if (err) new Notice("Error saving PDF: " + err.message);
               else     new Notice("✓ PDF saved: " + res.filePath);
               cleanupWin();
@@ -1767,7 +1780,7 @@ class PDFExportSettingTab extends PluginSettingTab {
     containerEl.empty();
     const s = this.plugin.settings;
 
-    new Setting(containerEl).setName("Advanced PDF Export").setHeading();
+    // new Setting(containerEl).setName("Advanced PDF Export").setHeading();
 
     // ── Style Preset ──────────────────────────────────────────────────────────
     new Setting(containerEl).setName("Style Preset").setHeading();
