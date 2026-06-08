@@ -41,9 +41,7 @@ interface DocStyle {
   marginRight: number;  // mm
 }
 
-// Minimal Electron type shims — just enough for the export path.
-// Typed overloads on `require` eliminate all unsafe-* lint warnings that
-// stem from the previous `any` return type.
+// Minimal Electron type shims — just enough for the PDF export path.
 
 interface ElectronBrowserWindow {
   loadURL(url: string): void;
@@ -90,7 +88,6 @@ interface AppWithSettings {
     openTabById?: (id: string) => void;
   };
 }
-
 
 interface PDFExportSettings extends DocStyle {
   pageSize: string;
@@ -610,11 +607,7 @@ function buildDocCSS(s: PDFExportSettings, isRTL = false): string {
   `.trim();
 }
 
-/** Collects every stylesheet that MathJax has injected into the document head
- *  (identified by `mjx-` or `MathJax` appearing in the rule text) and returns
- *  their combined CSS text.  The result is forwarded into shadow DOMs and the
- *  standalone export HTML so that CHTML-mode math renders identically there.
- *  Returns an empty string when no math is present (no MathJax sheets exist). */
+// Returns MathJax's injected CSS so it can be forwarded into shadow DOMs and export HTML.
 function getMathJaxCSS(): string {
   const parts: string[] = [];
   activeDocument.head.querySelectorAll<HTMLStyleElement>("style").forEach((el) => {
@@ -1437,8 +1430,7 @@ class PDFExportModal extends Modal {
 
     if (token !== this.renderToken) return;
 
-    // Forward MathJax's injected stylesheet into the shadow DOMs and the export
-    // HTML.  Without this, CHTML-mode math is invisible in both preview and PDF.
+    // Include MathJax's stylesheet so math renders in shadow DOMs and the export HTML.
     const mathCSS = getMathJaxCSS();
     const fullCSS = mathCSS ? `${mathCSS}\n${docCSS}` : docCSS;
 
@@ -1846,7 +1838,7 @@ class PDFExportSettingTab extends PluginSettingTab {
       .setName("Preset")
       .setDesc("Pick a preset to configure the overall document style. Fine-tune any setting below.")
       .addDropdown((d) => {
-        Object.entries(PRESETS).forEach(([k, v]) => d.addOption(k, v.name));
+        Object.entries(PRESETS).forEach(([k, v]) => { d.addOption(k, v.name); });
         d.setValue(s.preset).onChange((v) => {
           this.plugin.applyPreset(v);
           void this.markDirty().then(() => { this.buildSettings(); });
@@ -1864,7 +1856,7 @@ class PDFExportSettingTab extends PluginSettingTab {
     // ── Page ──────────────────────────────────────────────────────────────────
     new Setting(containerEl).setName("Page").setHeading();
     new Setting(containerEl).setName("Page size").addDropdown((d) => {
-      Object.keys(PAGE_SIZES).forEach((k) => d.addOption(k, k));
+      Object.keys(PAGE_SIZES).forEach((k) => { d.addOption(k, k); });
       d.setValue(s.pageSize).onChange((v) => {
         s.pageSize = v;
         void this.markDirty();
@@ -1924,7 +1916,7 @@ class PDFExportSettingTab extends PluginSettingTab {
       );
     customFontSetting.settingEl.toggleClass("is-hidden", s.fontFamily !== "__custom__");
     new Setting(containerEl).setName("Font size (px)").addDropdown((d) => {
-      ["10","11","12","13","14","15","16"].forEach((v) => d.addOption(v, v + "px"));
+      ["10","11","12","13","14","15","16"].forEach((v) => { d.addOption(v, v + "px"); });
       d.setValue(String(s.fontSize)).onChange((v) => {
         s.fontSize = parseInt(v);
         void this.markDirty();
