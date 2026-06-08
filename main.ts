@@ -41,8 +41,47 @@ interface DocStyle {
   marginRight: number;  // mm
 }
 
+// Minimal Electron type shims — just enough for the export path.
+// Typed overloads on `require` eliminate all unsafe-* lint warnings that
+// stem from the previous `any` return type.
+
+interface ElectronBrowserWindow {
+  loadURL(url: string): void;
+  close(): void;
+  webContents: {
+    once(event: "did-fail-load", listener: (event: unknown, code: number, desc: string) => void): void;
+    once(event: "did-finish-load", listener: () => void): void;
+    printToPDF(options: {
+      pageSize: string;
+      landscape: boolean;
+      printBackground: boolean;
+      margins: { marginType: string };
+    }): Promise<Buffer>;
+  };
+}
+
+interface ElectronRemote {
+  dialog: {
+    showSaveDialog(options: {
+      title: string;
+      defaultPath: string;
+      filters: { name: string; extensions: string[] }[];
+    }): Promise<{ canceled: boolean; filePath?: string }>;
+  };
+  BrowserWindow: new (options: {
+    show: boolean;
+    webPreferences: { nodeIntegration: boolean };
+  }) => ElectronBrowserWindow;
+}
+
+interface ElectronFs {
+  writeFile(path: string, data: Buffer, cb: (err: Error | null) => void): void;
+}
+
 interface ElectronBridge {
-  require(module: string): any;
+  require(module: "@electron/remote"): ElectronRemote;
+  require(module: "fs"): ElectronFs;
+  require(module: string): unknown;
 }
 
 interface AppWithSettings {
@@ -569,6 +608,20 @@ function buildDocCSS(s: PDFExportSettings, isRTL = false): string {
     background: transparent !important;
   }
   `.trim();
+}
+
+/** Collects every stylesheet that MathJax has injected into the document head
+ *  (identified by `mjx-` or `MathJax` appearing in the rule text) and returns
+ *  their combined CSS text.  The result is forwarded into shadow DOMs and the
+ *  standalone export HTML so that CHTML-mode math renders identically there.
+ *  Returns an empty string when no math is present (no MathJax sheets exist). */
+function getMathJaxCSS(): string {
+  const parts: string[] = [];
+  activeDocument.head.querySelectorAll<HTMLStyleElement>("style").forEach((el) => {
+    const text = el.textContent ?? "";
+    if (text.includes("mjx-") || text.includes("MathJax")) parts.push(text);
+  });
+  return parts.join("\n");
 }
 
 // ─── Paginator ────────────────────────────────────────────────────────────────
@@ -1384,14 +1437,19 @@ class PDFExportModal extends Modal {
 
     if (token !== this.renderToken) return;
 
+    // Forward MathJax's injected stylesheet into the shadow DOMs and the export
+    // HTML.  Without this, CHTML-mode math is invisible in both preview and PDF.
+    const mathCSS = getMathJaxCSS();
+    const fullCSS = mathCSS ? `${mathCSS}\n${docCSS}` : docCSS;
+
     const allPages: HTMLElement[][] = [];
     for (const sectionEl of sectionEls) {
-      allPages.push(...paginateEl(sectionEl, contentW, contentH, docCSS));
+      allPages.push(...paginateEl(sectionEl, contentW, contentH, fullCSS));
     }
 
     const layouts = buildPageLayouts(allPages, s);
     const resolvedFont = s.fontFamily === "__custom__" ? (s.customFontName.trim() || "inherit") : s.fontFamily;
-    this.layoutCache = { layouts, pw, ph, mTop, mLeft, footerH, headerH, contentW, contentH, docCSS, fontFamily: resolvedFont, accentColor: s.accentColor, pageBackground: s.pageBackground, isRTL };
+    this.layoutCache = { layouts, pw, ph, mTop, mLeft, footerH, headerH, contentW, contentH, docCSS: fullCSS, fontFamily: resolvedFont, accentColor: s.accentColor, pageBackground: s.pageBackground, isRTL };
 
     this.drawPreview(this.layoutCache, s.previewScale);
     this.pageCountEl.textContent = `${layouts.length} page${layouts.length !== 1 ? "s" : ""}`;
@@ -1668,10 +1726,10 @@ ${pageHTMLParts.join("\n")}
       // which has no `dialog` or `BrowserWindow` in the renderer process,
       // causing every export to fail with the wrong error message.
       const electron = window as unknown as ElectronBridge;
-      const remote = electron.require("@electron/remote");
+      const remote = electron.require("@electron/remote") as ElectronRemote | null;
       if (!remote?.dialog) throw new Error("no remote");
 
-      const res: { canceled: boolean; filePath?: string } = await remote.dialog.showSaveDialog({
+      const res = await remote.dialog.showSaveDialog({
         title: "Save PDF",
         defaultPath: (this.currentFile?.basename ?? "export") + ".pdf",
         filters: [{ name: "PDF", extensions: ["pdf"] }],
@@ -1685,7 +1743,7 @@ ${pageHTMLParts.join("\n")}
 
       const blob = new Blob([fullHTML], { type: "text/html" });
       const url  = URL.createObjectURL(blob);
-      const win  = new (remote.BrowserWindow)({ show: false, webPreferences: { nodeIntegration: false } });
+      const win  = new remote.BrowserWindow({ show: false, webPreferences: { nodeIntegration: false } });
 
       win.loadURL(url);
 
