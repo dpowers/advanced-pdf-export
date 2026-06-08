@@ -1,45 +1,58 @@
 # Advanced PDF Export — Obsidian Plugin
 
-Export Obsidian notes as pixel-perfect PDFs with six style presets, manual page breaks, full layout control, and a live preview — all from a full-screen modal panel.
+Export Obsidian notes as pixel-perfect PDFs with seven style presets, manual page breaks, full layout control, and a live preview — all from a full-screen modal panel.
 
 > **Desktop only** — requires the Obsidian desktop app (uses Electron's print pipeline).
 
 ![Main panel with live preview](screenshots/preview.png)
-<!-- Replace with a screenshot of the open modal showing the editor + preview side-by-side -->
 
+---
+
+## Table of Contents
+
+- [Features](#features)
+- [Screenshots](#screenshots)
+- [Installation](#installation)
+- [Usage](#usage)
+- [Settings Reference](#settings-reference)
+- [License](#license)
+
+---
 
 ## Features
 
 - **Live preview** — markdown editor on the left, paginated page preview on the right; render with **⟳ Render PDF** or `Ctrl+Enter`
 - **Auto-loads active note** — opening from a note's right-click menu or command palette pre-fills the editor (edits are local, non-destructive)
-- **Style presets** — six built-in presets: Default, Minimal, Academic, Colorful, Modern, Newspaper
+- **Seven style presets** — Default, Minimal, Academic, Colorful, Modern, Newspaper, Dark
 - **Page breaks** — `///` on its own line for a manual break; optionally auto-insert before every H1 or H2
 - **Page size & orientation** — A4, A3, A5, Letter, Legal × Portrait / Landscape
 - **Full layout control** — margins, font family/size/line height, paragraph spacing, heading scale, code font size, colors, heading borders, striped tables
-- **Header & footer** — custom text, page numbers (X / Y), position control
+- **Header & footer** — custom text, page numbers (X / Y), alignment, and first-page control
 
+
+---
 
 ## Screenshots
 
 ### Panel Overview
-![Quick Use overview](screenshots/overview.png)
+![Panel overview](screenshots/overview.png)
 
 ### Page Breaks
-Type `///` on its own line, or click the **Insert Page Break** button in the toolbar
+Type `///` on its own line, or click **Insert Page Break** in the toolbar.
 
 ![Page break syntax](screenshots/usage.png)
-<!-- Replace with a screenshot showing /// in the editor and the resulting page split in preview -->
 
 ### Style Presets
-![Preset dropdown in topbar](screenshots/style1.png)
+![Preset dropdown](screenshots/style1.png)
 
 ![Academic preset](screenshots/style2.png)
 
 ![Modern preset](screenshots/style3.png)
 
 ### Settings Panel
-Go to Settings Reference for settings screenshots
+![Settings](screenshots/settings1.png)
 
+---
 
 ## Installation
 
@@ -52,12 +65,13 @@ Search for **Advanced PDF Export** in **Settings → Community Plugins → Brows
 3. Place them in your vault at `.obsidian/plugins/advanced-pdf-export/`.
 4. Reload Obsidian and enable the plugin under **Settings → Community Plugins**.
 
+---
 
 ## Usage
 
-**Open the panel** — right-click any `.md` file in the file explorer, or use `Ctrl/Cmd + P` → *Advanced PDF Export: Open Panel*. The panel opens as a full-screen modal and auto-loads the target note.
+**Open the panel** — right-click any `.md` file in the file explorer, or use `Ctrl/Cmd+P` → *Advanced PDF Export: Open Panel*. The panel opens as a full-screen modal and auto-loads the target note.
 
-**Edit markdown** — type or paste markdown in the left editor. The editor does not sync changes back to your vault.
+**Edit markdown** — type or paste markdown in the left editor. Changes are not synced back to your vault.
 
 **Insert a page break** — type `///` on its own line, or click **Insert Page Break** in the topbar. Use `---` for a horizontal rule.
 
@@ -69,6 +83,7 @@ Search for **Advanced PDF Export** in **Settings → Community Plugins → Brows
 
 **Open settings** — click the ⚙ icon in the topbar, or go to **Settings → Advanced PDF Export**.
 
+---
 
 ## Settings Reference
 
@@ -82,7 +97,7 @@ All settings take effect after closing the settings panel.
 ### Style Preset
 | Setting | Description |
 |---|---|
-| Preset | Style theme: Default, Minimal, Academic, Colorful, Modern, Newspaper |
+| Preset | Style theme: Default, Minimal, Academic, Colorful, Modern, Newspaper, Dark |
 | Reset Preset | Restores all typographic and color values for the current preset to defaults |
 
 ### Page
@@ -95,7 +110,8 @@ All settings take effect after closing the settings panel.
 ### Typography
 | Setting | Options |
 |---|---|
-| Font family | Georgia, Times New Roman, Palatino, Arial, Helvetica, Trebuchet, Courier New |
+| Font family | Georgia, Times New Roman, Palatino, Arial, Helvetica, Trebuchet, Courier New, Custom |
+| Custom font name | Any CSS font-family value (e.g. `Inter, sans-serif`); font must be installed on your system |
 | Font size | 10 – 16 px |
 | Code font size | 0.75em – 1.00em |
 | Line height | Tight (1.4) → Double (2.0) |
@@ -103,7 +119,7 @@ All settings take effect after closing the settings panel.
 | Heading scale | 0.8× → 1.2× multiplier applied to all heading sizes |
 
 ### Colors
-Accent · Body text · Headings · Blockquote background · Blockquote border · Table header background · Code background
+Accent · Body text · Headings · Page background · Blockquote background · Blockquote border · Table header background · Code background
 
 ### Heading Style
 | Setting | Description |
@@ -121,19 +137,25 @@ Accent · Body text · Headings · Blockquote background · Blockquote border ·
 | Setting | Description |
 |---|---|
 | Show header | Toggle the header on or off |
-| Header text | Custom text shown top-right on every page |
+| Header text | Custom text shown on every page |
+| Header alignment | Left, Center, or Right |
 | Show footer | Toggle the footer on or off |
+| Footer border | Show a separator line above the footer |
 | Footer text | Custom text shown in the footer |
 | Show page numbers | Toggle *Page X / Y* display |
 | Page number position | Left, Center, or Right |
+| Page number start | Number assigned to the first visible page (default 1) |
+| Header/footer on first page | When off, page 1 has no header, footer, or page number |
 
 ### Behaviour
 | Setting | Description |
 |---|---|
+| Hide frontmatter | Strip the YAML frontmatter block (`--- … ---`) from preview and PDF |
 | Include file name as title | Prepends the note's filename as an H1 at the top of the PDF |
 | Auto page break before H1 | Inserts a page break before every `#` heading |
 | Auto page break before H2 | Inserts a page break before every `##` heading |
 
+---
 
 ## License
 
