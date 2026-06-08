@@ -6,7 +6,6 @@ Export Obsidian notes as pixel-perfect PDFs with seven style presets, manual pag
 
 ![Main panel with live preview](screenshots/preview.png)
 
----
 
 ## Table of Contents
 
@@ -17,7 +16,6 @@ Export Obsidian notes as pixel-perfect PDFs with seven style presets, manual pag
 - [Settings Reference](#settings-reference)
 - [License](#license)
 
----
 
 ## Features
 
@@ -29,8 +27,6 @@ Export Obsidian notes as pixel-perfect PDFs with seven style presets, manual pag
 - **Full layout control** — margins, font family/size/line height, paragraph spacing, heading scale, code font size, colors, heading borders, striped tables
 - **Header & footer** — custom text, page numbers (X / Y), alignment, and first-page control
 
-
----
 
 ## Screenshots
 
@@ -52,7 +48,6 @@ Type `///` on its own line, or click **Insert Page Break** in the toolbar.
 ### Settings Panel
 ![Settings](screenshots/settings1.png)
 
----
 
 ## Installation
 
@@ -65,7 +60,6 @@ Search for **Advanced PDF Export** in **Settings → Community Plugins → Brows
 3. Place them in your vault at `.obsidian/plugins/advanced-pdf-export/`.
 4. Reload Obsidian and enable the plugin under **Settings → Community Plugins**.
 
----
 
 ## Usage
 
@@ -83,7 +77,6 @@ Search for **Advanced PDF Export** in **Settings → Community Plugins → Brows
 
 **Open settings** — click the ⚙ icon in the topbar, or go to **Settings → Advanced PDF Export**.
 
----
 
 ## Settings Reference
 
@@ -155,7 +148,6 @@ Accent · Body text · Headings · Page background · Blockquote background · B
 | Auto page break before H1 | Inserts a page break before every `#` heading |
 | Auto page break before H2 | Inserts a page break before every `##` heading |
 
----
 
 ## License
 
