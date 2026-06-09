@@ -35,10 +35,10 @@ interface DocStyle {
   tableHeaderBg: string;
   tableStriped: boolean;
   pageBackground: string;
-  marginTop: number;    // mm
-  marginBottom: number; // mm
-  marginLeft: number;   // mm
-  marginRight: number;  // mm
+  marginTop: number;
+  marginBottom: number;
+  marginLeft: number;
+  marginRight: number;
 }
 
 // Minimal Electron type shims — just enough for the PDF export path.
@@ -349,7 +349,7 @@ const TOTAL_ALPHA = /[A-Za-z\u0590-\u08FF\uFB1D-\uFDFD\uFE70-\uFEFC]/g;
 function isRTLContent(text: string): boolean {
   const rtl   = (text.match(RTL_CHARS)   ?? []).length;
   const total = (text.match(TOTAL_ALPHA) ?? []).length;
-  return total > 0 && rtl / total > 0.1; // RTL wins if >10 % of alpha chars
+  return total > 0 && rtl / total > 0.1;
 }
 
 // ─── Markdown helpers ─────────────────────────────────────────────────────────
@@ -663,7 +663,7 @@ const UNSPLITTABLE_TAGS = new Set([
 
 // 2px guards against sub-pixel rendering differences between the light-DOM
 // paginator sandbox and the shadow DOM preview context.
-const HEIGHT_EPS = 2; // px
+const HEIGHT_EPS = 2;
 
 function measureNodesHeight(nodes: HTMLElement[], measureEl: HTMLElement): number {
   measureEl.empty();
@@ -1136,15 +1136,11 @@ export default class MarkdownPDFPlugin extends Plugin {
     const p = PRESETS[key];
     if (!p) return;
     if (reset) {
-      // Wipe any saved customisations so the preset defaults are fully restored.
       delete this.presetSnapshots[key];
     } else {
-      // Snapshot the current style before leaving this preset.
       this.presetSnapshots[this.settings.preset] = extractDocStyle(this.settings);
     }
     this.settings.preset = key;
-    // Apply preset defaults, then layer any previously saved overrides on top
-    // (empty object when resetting or switching to a never-customised preset).
     Object.assign(this.settings, p, reset ? {} : (this.presetSnapshots[key] ?? {}));
   }
 }
@@ -1752,13 +1748,7 @@ ${pageHTMLParts.join("\n")}
 </html>`;
 
     try {
-      // In Obsidian (Electron 14+) the `remote` module was moved out of the
-      // core `electron` package into the separate `@electron/remote` package.
-      // `electron.remote` is `undefined` on Electron 14+ (including Electron 39
-      // which ships with current Obsidian), so the old fallback
-      // `electron.remote || electron` silently used the plain `electron` object
-      // which has no `dialog` or `BrowserWindow` in the renderer process,
-      // causing every export to fail with the wrong error message.
+      // Obsidian (Electron 14+) moved `remote` to `@electron/remote`; `electron.remote` is undefined in the renderer.
       const electron = window as unknown as ElectronBridge;
       const remote = electron.require("@electron/remote") as ElectronRemote | null;
       if (!remote?.dialog) throw new Error("no remote");
@@ -1834,7 +1824,6 @@ class PDFExportSettingTab extends PluginSettingTab {
     this.plugin = plugin;
   }
 
-  /** Obsidian calls this when the tab becomes visible. */
   display(): void {
     // Start fresh: if nothing changes before hide(), no render will happen.
     this.dirty = false;
@@ -1853,10 +1842,6 @@ class PDFExportSettingTab extends PluginSettingTab {
     }
   }
 
-  /**
-   * Saves the current settings to disk and records that a re-render is
-   * pending.  The actual render is deferred until `hide()` fires.
-   */
   private async markDirty(): Promise<void> {
     this.dirty = true;
     await this.plugin.saveSettings();
@@ -1871,8 +1856,6 @@ class PDFExportSettingTab extends PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
     const s = this.plugin.settings;
-
-    // new Setting(containerEl).setName("Advanced PDF Export").setHeading();
 
     // ── Style Preset ──────────────────────────────────────────────────────────
     new Setting(containerEl).setName("Style Preset").setHeading();
