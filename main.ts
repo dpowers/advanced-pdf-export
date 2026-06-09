@@ -617,6 +617,23 @@ function buildDocCSS(s: PDFExportSettings, isRTL = false): string {
   `.trim();
 }
 
+/** Extracts only the DocStyle fields from the broader settings object. */
+function extractDocStyle(s: PDFExportSettings): DocStyle {
+  return {
+    name: s.name, fontFamily: s.fontFamily, fontSize: s.fontSize,
+    lineHeight: s.lineHeight, paragraphSpacing: s.paragraphSpacing,
+    headingScale: s.headingScale, accentColor: s.accentColor,
+    bodyColor: s.bodyColor, headingColor: s.headingColor,
+    h1BorderBottom: s.h1BorderBottom, h2BorderBottom: s.h2BorderBottom,
+    centerH1: s.centerH1, blockquoteBg: s.blockquoteBg,
+    blockquoteBorderColor: s.blockquoteBorderColor, codeBackground: s.codeBackground,
+    codeFontSize: s.codeFontSize, tableHeaderBg: s.tableHeaderBg,
+    tableStriped: s.tableStriped, pageBackground: s.pageBackground,
+    marginTop: s.marginTop, marginBottom: s.marginBottom,
+    marginLeft: s.marginLeft, marginRight: s.marginRight,
+  };
+}
+
 // Returns MathJax's injected CSS for shadow DOM rendering and export HTML.
 // Targets MJX-prefixed IDs to avoid accidentally capturing theme stylesheets.
 function getMathJaxCSS(): string {
@@ -1070,6 +1087,7 @@ function buildPageLayouts(allPages: HTMLElement[][], s: PDFExportSettings): Page
 export default class MarkdownPDFPlugin extends Plugin {
   declare settings: PDFExportSettings;
   activeModal: PDFExportModal | null = null;
+  presetSnapshots: Record<string, DocStyle> = {};
 
   async onload() {
     await this.loadSettings();
@@ -1100,11 +1118,13 @@ export default class MarkdownPDFPlugin extends Plugin {
   }
 
   async loadSettings() {
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData() as Partial<PDFExportSettings>);
+    const data = (await this.loadData() ?? {}) as Partial<PDFExportSettings> & { presetSnapshots?: Record<string, DocStyle> };
+    this.settings = Object.assign({}, DEFAULT_SETTINGS, data);
+    this.presetSnapshots = data.presetSnapshots ?? {};
   }
 
   async saveSettings() {
-    await this.saveData(this.settings);
+    await this.saveData({ ...this.settings, presetSnapshots: this.presetSnapshots });
   }
 
   async saveSettingsAndRender() {
@@ -1112,11 +1132,20 @@ export default class MarkdownPDFPlugin extends Plugin {
     this.activeModal?.render();
   }
 
-  applyPreset(key: string) {
+  applyPreset(key: string, reset = false) {
     const p = PRESETS[key];
     if (!p) return;
+    if (reset) {
+      // Wipe any saved customisations so the preset defaults are fully restored.
+      delete this.presetSnapshots[key];
+    } else {
+      // Snapshot the current style before leaving this preset.
+      this.presetSnapshots[this.settings.preset] = extractDocStyle(this.settings);
+    }
     this.settings.preset = key;
-    Object.assign(this.settings, p);
+    // Apply preset defaults, then layer any previously saved overrides on top
+    // (empty object when resetting or switching to a never-customised preset).
+    Object.assign(this.settings, p, reset ? {} : (this.presetSnapshots[key] ?? {}));
   }
 }
 
@@ -1861,7 +1890,7 @@ class PDFExportSettingTab extends PluginSettingTab {
         b.setButtonText("Reset Preset")
          .setTooltip("Reset current preset to its default values")
          .onClick(() => {
-           this.plugin.applyPreset(s.preset);
+           this.plugin.applyPreset(s.preset, true);
            void this.markDirty().then(() => { this.buildSettings(); });
          }),
       );
