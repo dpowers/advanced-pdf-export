@@ -336,6 +336,12 @@ function escapeHTML(s: string): string {
     .replace(/"/g, "&quot;");
 }
 
+// Escapes `</style` in CSS text to prevent the HTML parser from ending the
+// <style> block early, regardless of where the sequence appears.
+function escapeCSSForStyle(css: string): string {
+  return css.replace(/<\/style/gi, "<\\/style");
+}
+
 /** True when RTL script chars (Arabic, Hebrew, etc.) exceed 10 % of all
  *  alpha chars — ratio-based so mixed-script notes lean toward the majority. */
 const RTL_CHARS   = /[\u0590-\u08FF\uFB1D-\uFDFD\uFE70-\uFEFC]/g;
@@ -414,6 +420,10 @@ function postProcessRenderedHTML(root: HTMLElement): void {
     callout.classList.remove("is-collapsed");
     callout.querySelectorAll(".callout-fold").forEach((el) => el.remove());
   });
+
+  // Strip theme-injected <style>/<script> nodes because outerHTML
+  // serialization can break the export <head> if they contain `</style>`.
+  root.querySelectorAll("style, script").forEach((el) => el.remove());
 }
 
 // ─── CSS generator ────────────────────────────────────────────────────────────
@@ -607,14 +617,12 @@ function buildDocCSS(s: PDFExportSettings, isRTL = false): string {
   `.trim();
 }
 
-// Returns MathJax's injected CSS so it can be forwarded into shadow DOMs and export HTML.
+// Returns MathJax's injected CSS for shadow DOM rendering and export HTML.
+// Targets MJX-prefixed IDs to avoid accidentally capturing theme stylesheets.
 function getMathJaxCSS(): string {
-  const parts: string[] = [];
-  activeDocument.head.querySelectorAll<HTMLStyleElement>("style").forEach((el) => {
-    const text = el.textContent ?? "";
-    if (text.includes("mjx-") || text.includes("MathJax")) parts.push(text);
-  });
-  return parts.join("\n");
+  return Array.from(
+    activeDocument.head.querySelectorAll<HTMLStyleElement>("style[id^='MJX-']"),
+  ).map((el) => el.textContent ?? "").join("\n");
 }
 
 // ─── Paginator ────────────────────────────────────────────────────────────────
@@ -1657,7 +1665,12 @@ class PDFExportModal extends Modal {
     const { layouts, pw, ph, mTop, mLeft, footerH, headerH, contentW, docCSS, fontFamily, accentColor: exportAccent, pageBackground, isRTL } = cache;
 
     const pageHTMLParts = layouts.map((layout) => {
-      const contentHTML = layout.pageNodes.map((n) => n.outerHTML).join("\n");
+      const contentHTML = layout.pageNodes.map((n) => {
+        if (n.nodeName === "STYLE" || n.nodeName === "SCRIPT") return "";
+        const clone = n.cloneNode(true) as HTMLElement;
+        clone.querySelectorAll("style, script").forEach((el) => el.remove());
+        return clone.outerHTML;
+      }).join("\n");
 
       const hasExportHeader = s.showHeader && (layout.headerLeft || layout.headerCenter || layout.headerRight);
       const headerInnerHTML = layout.headerCenter
@@ -1702,7 +1715,7 @@ class PDFExportModal extends Modal {
 <head>
 <meta charset="UTF-8">
 <title>${escapeHTML(this.currentFile?.basename ?? "Export")}</title>
-<style>${printCSS}</style>
+<style>${escapeCSSForStyle(printCSS)}</style>
 </head>
 <body>
 ${pageHTMLParts.join("\n")}
