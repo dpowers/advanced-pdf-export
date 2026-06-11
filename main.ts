@@ -111,13 +111,15 @@ interface PDFExportSettings extends DocStyle {
   previewScale: number;
 }
 
-// Cached layout — lets zoom changes redraw without re-paginating.
+// Cached layout — holds everything drawPreview and exportPDF need so that
+// zoom changes can redraw without re-paginating.
 interface LayoutCache {
   layouts: PageLayout[];
   pw: number;
   ph: number;
   mTop: number;
   mLeft: number;
+  mRight: number;
   footerH: number;
   headerH: number;
   contentW: number;
@@ -354,6 +356,7 @@ function isRTLContent(text: string): boolean {
 
 // ─── Markdown helpers ─────────────────────────────────────────────────────────
 
+/** Normalises line endings to LF so the rest of the pipeline never sees CRLF. */
 function normalizeMarkdown(raw: string): string {
   return raw.replace(/\r\n/g, "\n");
 }
@@ -363,6 +366,7 @@ function stripFrontmatter(md: string): string {
   return md.replace(/^---[ \t]*\r?\n[\s\S]*?\r?\n---[ \t]*(\r?\n|$)/, "");
 }
 
+/** Splits on `///` manual page-break markers, trimming and dropping empty sections. */
 function splitMarkdownSections(md: string): string[] {
   return md
     .split(/^\/\/\/\s*$/m)
@@ -377,7 +381,17 @@ async function renderMarkdownToEl(
   component: Component,
 ): Promise<HTMLElement> {
   const temp = activeDocument.createElement("div");
-  await MarkdownRenderer.render(app, markdown, temp, sourcePath, component);
+  // Attach offscreen to the live document so Obsidian's async code-block
+  // post-processors (including mermaid) can render into a real DOM context.
+  // The element is detached again before being returned.
+  temp.style.cssText = "position:fixed;top:0;left:-99999px;visibility:hidden;pointer-events:none;";
+  activeDocument.body.appendChild(temp);
+  try {
+    await MarkdownRenderer.render(app, markdown, temp, sourcePath, component);
+    await waitForMermaidDiagrams(temp);
+  } finally {
+    activeDocument.body.removeChild(temp);
+  }
   postProcessRenderedHTML(temp);
   return temp;
 }
@@ -391,11 +405,13 @@ function slugifyHeading(text: string): string {
     .replace(/-+/g, "-");
 }
 
-// Cleans up Obsidian-specific artifacts from rendered HTML before paginating:
-// heading IDs for anchor links, external-link icon removal, copy-code button
-// removal, and callout force-expand.
+// Strips Obsidian-specific artefacts from rendered HTML so the output is
+// clean for pagination and export: assigns stable heading IDs for anchor
+// links, removes external-link decorators and copy-code buttons, force-expands
+// callouts, and strips top-level theme <style>/<script> injections while
+// preserving styles embedded inside SVGs (mermaid stores its theme CSS there).
 function postProcessRenderedHTML(root: HTMLElement): void {
-  // Heading IDs
+  // Stable, deduplicated IDs so in-page anchor links work across shadow DOMs.
   const seen = new Map<string, number>();
   root.querySelectorAll("h1,h2,h3,h4,h5,h6").forEach((el) => {
     const text = el.textContent || "";
@@ -406,12 +422,11 @@ function postProcessRenderedHTML(root: HTMLElement): void {
     el.id = count === 0 ? base : `${base}-${count}`;
   });
 
-  // Strip Obsidian's external-link class (triggers a ↗ icon via theme CSS).
+  // The external-link class triggers a ↗ icon via theme CSS — meaningless in print.
   root.querySelectorAll<HTMLAnchorElement>("a").forEach((a) => {
     a.classList.remove("external-link");
   });
 
-  // Remove copy-code buttons — meaningless in a static PDF.
   root.querySelectorAll(".copy-code-button").forEach((el) => el.remove());
 
   // Force-expand callouts: remove fold controls and collapsed state.
@@ -421,9 +436,39 @@ function postProcessRenderedHTML(root: HTMLElement): void {
     callout.querySelectorAll(".callout-fold").forEach((el) => el.remove());
   });
 
-  // Strip theme-injected <style>/<script> nodes because outerHTML
-  // serialization can break the export <head> if they contain `</style>`.
-  root.querySelectorAll("style, script").forEach((el) => el.remove());
+  // Drop theme-injected top-level <style>/<script> nodes — they can break the
+  // export <head> if they contain `</style>`, and are not needed in the PDF.
+  // Styles inside <svg> are kept: mermaid embeds its theme CSS directly there.
+  root.querySelectorAll("style, script").forEach((el) => {
+    if (!el.closest("svg")) el.remove();
+  });
+}
+
+/** Waits for Obsidian's mermaid post-processor to finish converting all mermaid
+ *  code blocks into rendered SVGs.  Each `.mermaid` container is watched via a
+ *  MutationObserver; resolves immediately if already rendered, otherwise waits
+ *  up to 5 s per diagram before timing out. */
+async function waitForMermaidDiagrams(el: HTMLElement): Promise<void> {
+  const containers = Array.from(el.querySelectorAll<HTMLElement>(".mermaid"));
+  if (containers.length === 0) return;
+  const TIMEOUT_MS = 5000;
+  await Promise.all(
+    containers.map(
+      (m) =>
+        new Promise<void>((resolve) => {
+          if (m.querySelector("svg")) { resolve(); return; }
+          const timer = window.setTimeout(() => { obs.disconnect(); resolve(); }, TIMEOUT_MS);
+          const obs = new MutationObserver(() => {
+            if (m.querySelector("svg")) {
+              window.clearTimeout(timer);
+              obs.disconnect();
+              resolve();
+            }
+          });
+          obs.observe(m, { childList: true, subtree: true });
+        }),
+    ),
+  );
 }
 
 // ─── CSS generator ────────────────────────────────────────────────────────────
@@ -535,7 +580,7 @@ function buildDocCSS(s: PDFExportSettings, isRTL = false): string {
   .mpdf-doc img { max-width: 100%; height: auto; display: block; margin: ${s.paragraphSpacing}em auto; }
   .mpdf-doc a { color: ${s.accentColor}; }
   .mpdf-doc a.external-link::after { display: none !important; content: none !important; }
-  /* Belt-and-suspenders: hide copy-code buttons re-injected after postProcessRenderedHTML. */
+  /* Hide copy-code buttons that survive postProcessRenderedHTML (e.g. re-injected by themes). */
   .mpdf-doc .copy-code-button { display: none !important; }
   .mpdf-doc table { width: 100%; border-collapse: collapse; margin: 0 0 ${s.paragraphSpacing}em; font-size: 0.92em; }
   .mpdf-doc th {
@@ -550,7 +595,7 @@ function buildDocCSS(s: PDFExportSettings, isRTL = false): string {
   .mpdf-doc td { padding: 5px 10px; border: 0.5px solid ${s.bodyColor}22; vertical-align: top; }
   ${s.tableStriped ? `.mpdf-doc tbody tr:nth-child(even) { background: ${s.tableHeaderBg}55; }` : ""}
 
-  /* Callouts — override theme styles with !important so preview and PDF are
+  /* Callouts — override theme styles with !important so preview and export are
    * identical regardless of the active Obsidian theme. */
   .mpdf-doc .callout {
     border-inline-start: 4px solid ${s.accentColor} !important;
@@ -614,6 +659,21 @@ function buildDocCSS(s: PDFExportSettings, isRTL = false): string {
     border-inline-start-color: ${s.accentColor}66 !important;
     background: transparent !important;
   }
+
+  /* Mermaid diagrams — centre the SVG and prevent it overflowing the content
+   * column.  The <style> block inside the SVG is intentionally left untouched;
+   * mermaid embeds its own theme CSS there. */
+  .mpdf-doc .mermaid {
+    display: flex;
+    justify-content: center;
+    margin: ${s.paragraphSpacing}em 0;
+    overflow: hidden;
+  }
+  .mpdf-doc .mermaid svg {
+    max-width: 100%;
+    height: auto;
+    display: block;
+  }
   `.trim();
 }
 
@@ -634,8 +694,9 @@ function extractDocStyle(s: PDFExportSettings): DocStyle {
   };
 }
 
-// Returns MathJax's injected CSS for shadow DOM rendering and export HTML.
-// Targets MJX-prefixed IDs to avoid accidentally capturing theme stylesheets.
+/** Collects MathJax's injected stylesheets for inclusion in shadow DOMs and
+ *  the export HTML.  Targets `MJX-` prefixed IDs to avoid capturing unrelated
+ *  theme stylesheets that Obsidian injects into the document head. */
 function getMathJaxCSS(): string {
   return Array.from(
     activeDocument.head.querySelectorAll<HTMLStyleElement>("style[id^='MJX-']"),
@@ -643,9 +704,9 @@ function getMathJaxCSS(): string {
 }
 
 // ─── Paginator ────────────────────────────────────────────────────────────────
-// Measures block children of the rendered HTML in a hidden off-screen sandbox
-// and distributes them into page buckets. Oversized elements are split by their
-// natural unit (line for PRE, row for TABLE, item for UL/OL, word for text).
+// Measures block children of the rendered HTML in a hidden, scoped sandbox and
+// distributes them into page buckets.  Oversized elements are split by their
+// natural unit: line for PRE, row for TABLE, item for UL/OL, word for text nodes.
 
 const INLINE_SPLIT_TAGS = new Set(["P", "LI", "BLOCKQUOTE", "TD", "TH"]);
 
@@ -945,9 +1006,8 @@ function paginateEl(
   contentHeightPx: number,
   docCSS: string,
 ): HTMLElement[][] {
-  // Fixed-position sandbox inside a shadow root so the measurement CSS is
-  // fully scoped and never pollutes the main document. Using adoptedStyleSheets
-  // avoids creating a <style> element.
+  // Off-screen shadow-root sandbox: CSS is fully scoped so it never pollutes
+  // the host document, and adoptedStyleSheets keeps the shadow tree clean.
   const sandboxHost = activeDocument.createElement("div");
   sandboxHost.style.cssText = [
     "position:fixed", "top:0", "left:-99999px",
@@ -986,13 +1046,13 @@ function paginateEl(
       const child = children[idx];
       const fits = makeFitFn(currentPage, measure, contentHeightPx);
 
-      if (fits(child.cloneNode(true) as HTMLElement)) {
+      if (fits(child)) {
         currentPage.push(child.cloneNode(true) as HTMLElement);
         idx++;
         continue;
       }
 
-      // Element doesn't fit on the current page. Try splitting it.
+      // Element doesn't fit. Try to split it across the page boundary.
       const forceSplit = currentPage.length === 0;
       const split = splitElement(child, fits, forceSplit);
       if (split) {
@@ -1034,6 +1094,8 @@ function paginateEl(
 
 // ─── Page layout builder ──────────────────────────────────────────────────────
 
+/** Converts paginated page-node arrays into fully-resolved PageLayout objects,
+ *  computing header/footer text and page number strings for each page. */
 function buildPageLayouts(allPages: HTMLElement[][], s: PDFExportSettings): PageLayout[] {
   const totalPages = allPages.length;
   return allPages.map((pageNodes, i) => {
@@ -1206,7 +1268,7 @@ class PDFExportModal extends Modal {
       this.noteTitleEl.textContent = file.basename;
       this.noteTitleEl.title = file.path;
       this.showLoading();
-      // Two rAFs let the browser paint the modal before pagination starts.
+      // Two rAFs: spinner renders before the synchronous pagination work blocks the thread.
       await new Promise<void>((r) => window.requestAnimationFrame(() => window.requestAnimationFrame(() => r())));
       this.render(true);
     }
@@ -1240,6 +1302,7 @@ class PDFExportModal extends Modal {
       "or keyboard shortcut to auto-load the active note.\n\n" +
       "Use /// on its own line for a manual page break.\n" +
       "Use --- for a horizontal rule.\n\n" +
+      "Mermaid diagrams are supported:\n```mermaid\nflowchart LR\n  A --> B --> C\n```\n\n" +
       "Markdown tables:\n| Col A | Col B |\n|-------|-------|\n| Cell  | Cell  |";
 
     // Preview container keeps the loading overlay fixed (non-scrolling) over the panel.
@@ -1354,8 +1417,8 @@ class PDFExportModal extends Modal {
 
   // ── Render ──────────────────────────────────────────────────────────────────
 
-  // immediate=true: start on next frame (button, Ctrl+Enter, open).
-  // immediate=false: debounce 150ms (settings changes).
+  // immediate=true  → run on the next frame (button click, Ctrl+Enter, onOpen).
+  // immediate=false → debounce 150 ms (settings panel changes).
   render(immediate = false) {
     const token = ++this.renderToken;
     if (this.renderDebounceTimer !== null) {
@@ -1373,8 +1436,8 @@ class PDFExportModal extends Modal {
       });
 
     if (immediate) {
-      // Two rAFs: first fires before paint, second after — ensures the spinner
-      // renders before the synchronous pagination work blocks the thread.
+      // Two rAFs: the first fires before paint, the second after — the spinner
+      // must be visible before the synchronous pagination work blocks the thread.
       window.requestAnimationFrame(() => window.requestAnimationFrame(() => void safeDo()));
     } else {
       this.renderDebounceTimer = window.setTimeout(() => {
@@ -1451,19 +1514,20 @@ class PDFExportModal extends Modal {
     const mRight  = mmToPx(s.marginRight);
     const footerH = s.showFooter ? 28 : 0;
     const headerH = s.showHeader && s.headerText ? 20 : 0;
-    const contentW = pw - mLeft - mRight;
-    const contentH = ph - mTop - mBottom - footerH - headerH;
+    // Clamp to at least 1 px so the paginator sandbox never has zero dimensions.
+    const contentW = Math.max(1, pw - mLeft - mRight);
+    const contentH = Math.max(1, ph - mTop - mBottom - footerH - headerH);
     const isRTL    = isRTLContent(this.editorEl.value);
     const docCSS   = buildDocCSS(s, isRTL);
     const sourcePath = this.currentFile?.path ?? "pdf-export";
 
     const sectionEls = await Promise.all(
-      sections.map((sec) => renderMarkdownToEl(this.app, sec.trim(), sourcePath, this.renderComponent)),
+      sections.map((sec) => renderMarkdownToEl(this.app, sec, sourcePath, this.renderComponent)),
     );
 
     if (token !== this.renderToken) return;
 
-    // Include MathJax's stylesheet so math renders in shadow DOMs and the export HTML.
+    // Forward MathJax styles so math renders correctly in shadow DOMs and export HTML.
     const mathCSS = getMathJaxCSS();
     const fullCSS = mathCSS ? `${mathCSS}\n${docCSS}` : docCSS;
 
@@ -1474,7 +1538,7 @@ class PDFExportModal extends Modal {
 
     const layouts = buildPageLayouts(allPages, s);
     const resolvedFont = s.fontFamily === "__custom__" ? (s.customFontName.trim() || "inherit") : s.fontFamily;
-    this.layoutCache = { layouts, pw, ph, mTop, mLeft, footerH, headerH, contentW, contentH, docCSS: fullCSS, fontFamily: resolvedFont, accentColor: s.accentColor, pageBackground: s.pageBackground, isRTL };
+    this.layoutCache = { layouts, pw, ph, mTop, mLeft, mRight, footerH, headerH, contentW, contentH, docCSS: fullCSS, fontFamily: resolvedFont, accentColor: s.accentColor, pageBackground: s.pageBackground, isRTL };
 
     this.drawPreview(this.layoutCache, s.previewScale);
     this.pageCountEl.textContent = `${layouts.length} page${layouts.length !== 1 ? "s" : ""}`;
@@ -1499,12 +1563,11 @@ class PDFExportModal extends Modal {
   }
 
   private drawPreview(c: LayoutCache, scale: number) {
-    const { layouts, pw, ph, mTop, mLeft, footerH, headerH, contentW, docCSS, fontFamily, accentColor, pageBackground, isRTL } = c;
+    const { layouts, pw, ph, mTop, mLeft, mRight, footerH, headerH, contentW, docCSS, fontFamily, accentColor, pageBackground, isRTL } = c;
     const s = this.plugin.settings;
     this.previewEl.empty();
 
-    // Map heading IDs to page-wrap indices for in-page anchor scrolling.
-    // We scroll the light-DOM wrap (not the shadow-root element) into view.
+    // Map heading IDs → page-wrap index for in-preview anchor scrolling.
     const idToWrapIndex = new Map<string, number>();
     layouts.forEach((layout, i) => {
       for (const node of layout.pageNodes) {
@@ -1516,6 +1579,26 @@ class PDFExportModal extends Modal {
     });
 
     const pageWraps: HTMLElement[] = [];
+
+    // All pages share identical CSS — build once and adopt by reference in each shadow root.
+    const shadowCSS = `
+      :host {
+        display: block;
+        width: ${pw}px;
+        height: ${ph}px;
+        background: ${pageBackground};
+        box-shadow: 0 2px 8px rgba(0,0,0,.30), 0 8px 32px rgba(0,0,0,.25);
+        overflow: hidden;
+        position: relative;
+        box-sizing: border-box;
+      }
+      *, *::before, *::after { box-sizing: border-box; }
+      .mpdf-hf-center { flex: 1; text-align: center; }
+      .mpdf-hf-right { margin-left: auto; }
+      ${docCSS}
+    `;
+    const pageSheet = new CSSStyleSheet();
+    pageSheet.replaceSync(shadowCSS);
 
     for (const layout of layouts) {
       const scaledW = Math.round(pw * scale);
@@ -1537,27 +1620,6 @@ class PDFExportModal extends Modal {
       scaleWrap.appendChild(shadowHost);
 
       const shadow = shadowHost.attachShadow({ mode: "open" });
-
-      // Use adoptedStyleSheets instead of a <style> element — avoids the
-      // no-create-style-element lint rule and keeps shadow CSS fully scoped.
-      const shadowCSS = `
-        :host {
-          display: block;
-          width: ${pw}px;
-          height: ${ph}px;
-          background: ${pageBackground};
-          box-shadow: 0 2px 8px rgba(0,0,0,.30), 0 8px 32px rgba(0,0,0,.25);
-          overflow: hidden;
-          position: relative;
-          box-sizing: border-box;
-        }
-        *, *::before, *::after { box-sizing: border-box; }
-        .mpdf-hf-center { flex: 1; text-align: center; }
-        .mpdf-hf-right { margin-left: auto; }
-        ${docCSS}
-      `;
-      const pageSheet = new CSSStyleSheet();
-      pageSheet.replaceSync(shadowCSS);
       shadow.adoptedStyleSheets = [pageSheet];
 
       // ── Header ───────────────────────────────────────────────────────────────
@@ -1565,7 +1627,7 @@ class PDFExportModal extends Modal {
       if (hasHeader) {
         const hdr = activeDocument.createElement("div");
         hdr.style.cssText = [
-          "position:absolute", `top:${mTop * 0.4}px`, `left:${mLeft}px`, `right:${mLeft}px`,
+          "position:absolute", `top:${mTop * 0.4}px`, `left:${mLeft}px`, `right:${mRight}px`,
           "display:flex", "align-items:center",
           "font-size:9px", "color:#999", `font-family:${fontFamily}`, "white-space:nowrap",
         ].join(";");
@@ -1590,10 +1652,10 @@ class PDFExportModal extends Modal {
       const contentDiv = activeDocument.createElement("div");
       contentDiv.className = "mpdf-doc";
       if (isRTL) contentDiv.setAttribute("dir", "rtl");
-      // No height/overflow:hidden — the :host clips at the page boundary.
-      // A second clip here caused bottom lines to vanish in preview due to
-      // sub-pixel differences between the light-DOM paginator sandbox and
-      // the shadow DOM rendering context. The export path never set these.
+      // No explicit height or overflow:hidden — :host clips at the page edge.
+      // Adding a second clip here caused bottom lines to be cut off in preview
+      // due to sub-pixel rounding differences between the paginator sandbox
+      // (light DOM) and the shadow DOM rendering context.
       contentDiv.style.cssText = [
         "position:absolute", `top:${mTop + headerH}px`, `left:${mLeft}px`,
         `width:${contentW}px`,
@@ -1623,7 +1685,7 @@ class PDFExportModal extends Modal {
           "position:absolute", "bottom:0", "left:0", "right:0",
           `height:${footerH}px`, "display:flex", "align-items:center",
           s.showFooterBorder ? `border-top:0.5px solid ${accentColor}33` : "",
-          `padding:0 ${mLeft}px`, "font-size:9px", "color:#aaa", `font-family:${fontFamily}`,
+          `padding:0 ${mRight}px 0 ${mLeft}px`, "font-size:9px", "color:#aaa", `font-family:${fontFamily}`,
         ].filter(Boolean).join(";");
 
         if (layout.footerCenter) {
@@ -1659,8 +1721,7 @@ class PDFExportModal extends Modal {
     };
 
     // Ensure we have a layout — run a full render if the modal was just opened.
-    // We skip requestAnimationFrame here because the export button is already
-    // disabled; we don't need to yield for a paint before starting the work.
+    // The export button is already disabled, so no paint yield is needed.
     if (!this.layoutCache) {
       // Cancel any pending debounced render — this export render supersedes it.
       if (this.renderDebounceTimer !== null) {
@@ -1687,13 +1748,15 @@ class PDFExportModal extends Modal {
       return;
     }
 
-    const { layouts, pw, ph, mTop, mLeft, footerH, headerH, contentW, docCSS, fontFamily, accentColor: exportAccent, pageBackground, isRTL } = cache;
+    const { layouts, pw, ph, mTop, mLeft, mRight, footerH, headerH, contentW, docCSS, fontFamily, accentColor: exportAccent, pageBackground, isRTL } = cache;
 
     const pageHTMLParts = layouts.map((layout) => {
       const contentHTML = layout.pageNodes.map((n) => {
-        if (n.nodeName === "STYLE" || n.nodeName === "SCRIPT") return "";
         const clone = n.cloneNode(true) as HTMLElement;
-        clone.querySelectorAll("style, script").forEach((el) => el.remove());
+        // Styles inside SVGs are kept — mermaid embeds its theme CSS there.
+        clone.querySelectorAll("style, script").forEach((el) => {
+          if (!el.closest("svg")) el.remove();
+        });
         return clone.outerHTML;
       }).join("\n");
 
@@ -1702,7 +1765,7 @@ class PDFExportModal extends Modal {
         ? `<span style="flex:1;text-align:center;">${escapeHTML(layout.headerCenter)}</span>`
         : `<span>${escapeHTML(layout.headerLeft)}</span><span style="margin-left:auto;">${escapeHTML(layout.headerRight)}</span>`;
       const headerHTML = hasExportHeader
-        ? `<div style="position:absolute;top:${mTop * 0.4}px;left:${mLeft}px;right:${mLeft}px;display:flex;align-items:center;font-size:9px;color:#999;font-family:${fontFamily};white-space:nowrap;">${headerInnerHTML}</div>`
+        ? `<div style="position:absolute;top:${mTop * 0.4}px;left:${mLeft}px;right:${mRight}px;display:flex;align-items:center;font-size:9px;color:#999;font-family:${fontFamily};white-space:nowrap;">${headerInnerHTML}</div>`
         : "";
 
       const footerInnerHTML = layout.footerCenter
@@ -1712,7 +1775,7 @@ class PDFExportModal extends Modal {
       const hasExportFooter = s.showFooter && (layout.footerLeft || layout.footerRight || layout.footerCenter);
       const footerBorder = s.showFooterBorder ? `border-top:0.5px solid ${exportAccent}33;` : "";
       const footerHTML = hasExportFooter
-        ? `<div style="position:absolute;bottom:0;left:0;right:0;height:${footerH}px;display:flex;align-items:center;${footerBorder}padding:0 ${mLeft}px;font-size:9px;color:#aaa;font-family:${fontFamily};">${footerInnerHTML}</div>`
+        ? `<div style="position:absolute;bottom:0;left:0;right:0;height:${footerH}px;display:flex;align-items:center;${footerBorder}padding:0 ${mRight}px 0 ${mLeft}px;font-size:9px;color:#aaa;font-family:${fontFamily};">${footerInnerHTML}</div>`
         : "";
 
       const contentDivHTML = `<div class="mpdf-doc"${isRTL ? ' dir="rtl"' : ''} style="position:absolute;top:${mTop + headerH}px;left:${mLeft}px;width:${contentW}px;">${contentHTML}</div>`;
@@ -1748,7 +1811,8 @@ ${pageHTMLParts.join("\n")}
 </html>`;
 
     try {
-      // Obsidian (Electron 14+) moved `remote` to `@electron/remote`; `electron.remote` is undefined in the renderer.
+      // Obsidian uses @electron/remote; the legacy `electron.remote` property is
+      // undefined in the renderer process of modern Electron versions.
       const electron = window as unknown as ElectronBridge;
       const remote = electron.require("@electron/remote") as ElectronRemote | null;
       if (!remote?.dialog) throw new Error("no remote");
@@ -1771,8 +1835,7 @@ ${pageHTMLParts.join("\n")}
 
       win.loadURL(url);
 
-      // Both did-fail-load and did-finish-load can fire for the same load;
-      // guard with a flag so only the first one acts.
+      // Both events can fire for the same load — a flag ensures only the first one acts.
       let exportHandled = false;
       const cleanupWin = () => { URL.revokeObjectURL(url); win.close(); resetExportBtn(); };
 
