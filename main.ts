@@ -384,7 +384,7 @@ async function renderMarkdownToEl(
   // Attach offscreen to the live document so Obsidian's async code-block
   // post-processors (including mermaid) can render into a real DOM context.
   // The element is detached again before being returned.
-  temp.style.cssText = "position:fixed;top:0;left:-99999px;visibility:hidden;pointer-events:none;";
+  temp.setCssStyles({ position: "fixed", top: "0", left: "-99999px", visibility: "hidden", pointerEvents: "none" });
   activeDocument.body.appendChild(temp);
   try {
     await MarkdownRenderer.render(app, markdown, temp, sourcePath, component);
@@ -1009,11 +1009,11 @@ function paginateEl(
   // Off-screen shadow-root sandbox: CSS is fully scoped so it never pollutes
   // the host document, and adoptedStyleSheets keeps the shadow tree clean.
   const sandboxHost = activeDocument.createElement("div");
-  sandboxHost.style.cssText = [
-    "position:fixed", "top:0", "left:-99999px",
-    `width:${contentWidthPx}px`,
-    "visibility:hidden", "pointer-events:none", "z-index:-1",
-  ].join(";");
+  sandboxHost.setCssStyles({
+    position: "fixed", top: "0", left: "-99999px",
+    width: `${contentWidthPx}px`,
+    visibility: "hidden", pointerEvents: "none", zIndex: "-1",
+  });
 
   const sandboxShadow = sandboxHost.attachShadow({ mode: "open" });
 
@@ -1031,7 +1031,7 @@ function paginateEl(
   // Measurement div: same width, always empty before each measurement.
   const measure = activeDocument.createElement("div");
   measure.className = "mpdf-doc";
-  measure.style.cssText = `position:absolute;top:0;left:0;width:${contentWidthPx}px;visibility:hidden;`;
+  measure.setCssStyles({ position: "absolute", top: "0", left: "0", width: `${contentWidthPx}px`, visibility: "hidden" });
   sandboxShadow.appendChild(measure);
 
   activeDocument.body.appendChild(sandboxHost);
@@ -1605,18 +1605,18 @@ class PDFExportModal extends Modal {
       const scaledH = Math.round(ph * scale);
 
       const wrap = this.previewEl.createEl("div", { cls: "mpdf-page-wrap" });
-      wrap.style.cssText = `width:${scaledW}px;height:${scaledH}px;`;
+      wrap.setCssStyles({ width: `${scaledW}px`, height: `${scaledH}px` });
       wrap.createEl("div", { cls: "mpdf-page-label", text: `Page ${layout.pageNum} of ${layout.totalPages}` });
       pageWraps.push(wrap);
 
       const scaleWrap = wrap.createEl("div", { cls: "mpdf-page-scale" });
-      scaleWrap.style.cssText = `width:${scaledW}px;height:${scaledH}px;`;
+      scaleWrap.setCssStyles({ width: `${scaledW}px`, height: `${scaledH}px` });
 
       // Each page renders inside a shadow root so Obsidian's theme CSS cannot
       // reach the page content across the shadow boundary.
       const shadowHost = activeDocument.createElement("div");
       shadowHost.addClass("mpdf-shadow-host");
-      shadowHost.style.cssText = `width:${pw}px;height:${ph}px;transform:scale(${scale});`;
+      shadowHost.setCssStyles({ width: `${pw}px`, height: `${ph}px`, transform: `scale(${scale})` });
       scaleWrap.appendChild(shadowHost);
 
       const shadow = shadowHost.attachShadow({ mode: "open" });
@@ -1626,11 +1626,11 @@ class PDFExportModal extends Modal {
       const hasHeader = s.showHeader && (layout.headerLeft || layout.headerCenter || layout.headerRight);
       if (hasHeader) {
         const hdr = activeDocument.createElement("div");
-        hdr.style.cssText = [
-          "position:absolute", `top:${mTop * 0.4}px`, `left:${mLeft}px`, `right:${mRight}px`,
-          "display:flex", "align-items:center",
-          "font-size:9px", "color:#999", `font-family:${fontFamily}`, "white-space:nowrap",
-        ].join(";");
+        hdr.setCssStyles({
+          position: "absolute", top: `${mTop * 0.4}px`, left: `${mLeft}px`, right: `${mRight}px`,
+          display: "flex", alignItems: "center",
+          fontSize: "9px", color: "#999", fontFamily: fontFamily, whiteSpace: "nowrap",
+        });
         if (layout.headerCenter) {
           const span = activeDocument.createElement("span");
           span.className = "mpdf-hf-center";
@@ -1656,10 +1656,10 @@ class PDFExportModal extends Modal {
       // Adding a second clip here caused bottom lines to be cut off in preview
       // due to sub-pixel rounding differences between the paginator sandbox
       // (light DOM) and the shadow DOM rendering context.
-      contentDiv.style.cssText = [
-        "position:absolute", `top:${mTop + headerH}px`, `left:${mLeft}px`,
-        `width:${contentW}px`,
-      ].join(";");
+      contentDiv.setCssStyles({
+        position: "absolute", top: `${mTop + headerH}px`, left: `${mLeft}px`,
+        width: `${contentW}px`,
+      });
       for (const node of layout.pageNodes) contentDiv.appendChild(node.cloneNode(true));
       shadow.appendChild(contentDiv);
 
@@ -1681,12 +1681,12 @@ class PDFExportModal extends Modal {
       const hasFooter = s.showFooter && (layout.footerLeft || layout.footerRight || layout.footerCenter);
       if (hasFooter) {
         const footer = activeDocument.createElement("div");
-        footer.style.cssText = [
-          "position:absolute", "bottom:0", "left:0", "right:0",
-          `height:${footerH}px`, "display:flex", "align-items:center",
-          s.showFooterBorder ? `border-top:0.5px solid ${accentColor}33` : "",
-          `padding:0 ${mRight}px 0 ${mLeft}px`, "font-size:9px", "color:#aaa", `font-family:${fontFamily}`,
-        ].filter(Boolean).join(";");
+        footer.setCssStyles({
+          position: "absolute", bottom: "0", left: "0", right: "0",
+          height: `${footerH}px`, display: "flex", alignItems: "center",
+          ...(s.showFooterBorder ? { borderTop: `0.5px solid ${accentColor}33` } : {}),
+          padding: `0 ${mRight}px 0 ${mLeft}px`, fontSize: "9px", color: "#aaa", fontFamily: fontFamily,
+        });
 
         if (layout.footerCenter) {
           const span = activeDocument.createElement("span");
