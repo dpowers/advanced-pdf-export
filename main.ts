@@ -593,6 +593,15 @@ const CODE_THEMES: Record<string, CodeColorTheme> = {
       function: "#8aadf4", regex: "#f5bde6",
     },
   },
+  "catppuccin-mocha": {
+    name: "Catppuccin Mocha",
+    background: "#1e1e2e", text: "#cdd6f4",
+    tokens: {
+      comment: "#9399b2", punctuation: "#bac2de", property: "#fab387",
+      selector: "#a6e3a1", operator: "#89dceb", keyword: "#cba6f7",
+      function: "#89b4fa", regex: "#f5c2e7",
+    },
+  },
 };
 
 /** Builds the `<pre>`/`<pre><code>` rules plus Prism `.token.*` colour mappings
