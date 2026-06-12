@@ -32,6 +32,7 @@ interface DocStyle {
   blockquoteBorderColor: string;
   codeBackground: string;
   codeFontSize: number;
+  codeTheme: string;
   tableHeaderBg: string;
   tableStriped: boolean;
   pageBackground: string;
@@ -163,6 +164,7 @@ const PRESETS: Record<string, DocStyle> = {
     blockquoteBorderColor: "#7c6af7",
     codeBackground: "#f0f0f8",
     codeFontSize: 0.85,
+    codeTheme: "github-light",
     tableHeaderBg: "#f0f0f8",
     tableStriped: true,
     pageBackground: "#ffffff",
@@ -185,6 +187,7 @@ const PRESETS: Record<string, DocStyle> = {
     blockquoteBorderColor: "#ccc",
     codeBackground: "#f4f4f4",
     codeFontSize: 0.82,
+    codeTheme: "none",
     tableHeaderBg: "#efefef",
     tableStriped: false,
     pageBackground: "#ffffff",
@@ -207,6 +210,7 @@ const PRESETS: Record<string, DocStyle> = {
     blockquoteBorderColor: "#999",
     codeBackground: "#f9f9f9",
     codeFontSize: 0.88,
+    codeTheme: "solarized-light",
     tableHeaderBg: "#e8e8e8",
     tableStriped: false,
     pageBackground: "#ffffff",
@@ -229,6 +233,7 @@ const PRESETS: Record<string, DocStyle> = {
     blockquoteBorderColor: "#e84393",
     codeBackground: "#f0eaff",
     codeFontSize: 0.85,
+    codeTheme: "dracula",
     tableHeaderBg: "#2d0a4e",
     tableStriped: true,
     pageBackground: "#ffffff",
@@ -251,6 +256,7 @@ const PRESETS: Record<string, DocStyle> = {
     blockquoteBorderColor: "#0070f3",
     codeBackground: "#f1f5f9",
     codeFontSize: 0.85,
+    codeTheme: "github-dark",
     tableHeaderBg: "#0070f3",
     tableStriped: true,
     pageBackground: "#ffffff",
@@ -273,6 +279,7 @@ const PRESETS: Record<string, DocStyle> = {
     blockquoteBorderColor: "#111",
     codeBackground: "#f4f4f4",
     codeFontSize: 0.82,
+    codeTheme: "none",
     tableHeaderBg: "#111",
     tableStriped: false,
     pageBackground: "#ffffff",
@@ -295,6 +302,7 @@ const PRESETS: Record<string, DocStyle> = {
     blockquoteBorderColor: "#818cf8",
     codeBackground: "#0f172a",
     codeFontSize: 0.85,
+    codeTheme: "tokyo-night",
     tableHeaderBg: "#1e293b",
     tableStriped: true,
     pageBackground: "#111827",
@@ -471,6 +479,151 @@ async function waitForMermaidDiagrams(el: HTMLElement): Promise<void> {
   );
 }
 
+// ─── Code block syntax highlighting ────────────────────────────────────────
+// Obsidian highlights fenced code with Prism `.token.<name>` spans, but the
+// theme CSS that colours them is stripped for export — colours are reapplied
+// here independently via the same classes.
+
+type TokenGroup =
+  | "comment" | "punctuation" | "property" | "selector"
+  | "operator" | "keyword" | "function" | "regex";
+
+// Groups Prism's token classes into the small set of categories most colour
+// schemes distinguish. Multiple Prism classes commonly share one colour.
+const TOKEN_GROUP_CLASSES: Record<TokenGroup, string[]> = {
+  comment:     ["comment", "prolog", "doctype", "cdata"],
+  punctuation: ["punctuation"],
+  property:    ["property", "tag", "boolean", "number", "constant", "symbol", "deleted", "attr-name"],
+  selector:    ["selector", "string", "char", "builtin", "inserted", "attr-value"],
+  operator:    ["operator", "entity", "url"],
+  keyword:     ["atrule", "keyword", "important"],
+  function:    ["function", "class-name"],
+  regex:       ["regex", "variable"],
+};
+
+interface CodeColorTheme {
+  name: string;
+  /** `<pre>` background. Falls back to the doc style's "Code background" when unset. */
+  background?: string;
+  /** Base `<pre><code>` text color. Falls back to the doc style's "Body text color" when unset. */
+  text?: string;
+  tokens?: Partial<Record<TokenGroup, string>>;
+}
+
+const CODE_THEMES: Record<string, CodeColorTheme> = {
+  none: { name: "None (plain)" },
+  "github-light": {
+    name: "GitHub Light",
+    background: "#f6f8fa", text: "#24292e",
+    tokens: {
+      comment: "#6a737d", punctuation: "#24292e", property: "#005cc5",
+      selector: "#032f62", operator: "#d73a49", keyword: "#d73a49",
+      function: "#6f42c1", regex: "#032f62",
+    },
+  },
+  "github-dark": {
+    name: "GitHub Dark",
+    background: "#0d1117", text: "#c9d1d9",
+    tokens: {
+      comment: "#8b949e", punctuation: "#c9d1d9", property: "#79c0ff",
+      selector: "#a5d6ff", operator: "#ff7b72", keyword: "#ff7b72",
+      function: "#d2a8ff", regex: "#a5d6ff",
+    },
+  },
+  "atom-one-light": {
+    name: "Atom One Light",
+    background: "#fafafa", text: "#383a42",
+    tokens: {
+      comment: "#a0a1a7", punctuation: "#383a42", property: "#986801",
+      selector: "#50a14f", operator: "#0184bc", keyword: "#a626a4",
+      function: "#4078f2", regex: "#50a14f",
+    },
+  },
+  "atom-one-dark": {
+    name: "Atom One Dark",
+    background: "#282c34", text: "#abb2bf",
+    tokens: {
+      comment: "#5c6370", punctuation: "#abb2bf", property: "#d19a66",
+      selector: "#98c379", operator: "#56b6c2", keyword: "#c678dd",
+      function: "#61afef", regex: "#98c379",
+    },
+  },
+  monokai: {
+    name: "Monokai",
+    background: "#272822", text: "#f8f8f2",
+    tokens: {
+      comment: "#75715e", punctuation: "#f8f8f2", property: "#ae81ff",
+      selector: "#e6db74", operator: "#f92672", keyword: "#f92672",
+      function: "#a6e22e", regex: "#e6db74",
+    },
+  },
+  dracula: {
+    name: "Dracula",
+    background: "#282a36", text: "#f8f8f2",
+    tokens: {
+      comment: "#6272a4", punctuation: "#f8f8f2", property: "#bd93f9",
+      selector: "#f1fa8c", operator: "#ff79c6", keyword: "#ff79c6",
+      function: "#50fa7b", regex: "#ff79c6",
+    },
+  },
+  "tokyo-night": {
+    name: "Tokyo Night",
+    background: "#1a1b26", text: "#a9b1d6",
+    tokens: {
+      comment: "#565f89", punctuation: "#89ddff", property: "#ff9e64",
+      selector: "#9ece6a", operator: "#89ddff", keyword: "#bb9af7",
+      function: "#7aa2f7", regex: "#b4f9f8",
+    },
+  },
+  "solarized-light": {
+    name: "Solarized Light",
+    background: "#fdf6e3", text: "#586e75",
+    tokens: {
+      comment: "#93a1a1", punctuation: "#586e75", property: "#cb4b16",
+      selector: "#2aa198", operator: "#859900", keyword: "#859900",
+      function: "#268bd2", regex: "#2aa198",
+    },
+  },
+};
+
+/** Builds the `<pre>`/`<pre><code>` rules plus Prism `.token.*` colour mappings
+ *  for the selected code theme. "None" keeps the previous plain styling
+ *  (code background + body color, no token colours). */
+function buildCodeBlockCSS(s: PDFExportSettings): string {
+  const theme = CODE_THEMES[s.codeTheme] ?? CODE_THEMES.none;
+  const background = theme.background ?? s.codeBackground;
+  const text = theme.text ?? s.bodyColor;
+
+  const tokenRules = Object.entries(theme.tokens ?? {})
+    .map(([group, color]) => {
+      const selector = TOKEN_GROUP_CLASSES[group as TokenGroup]
+        .map((cls) => `.mpdf-doc pre code .token.${cls}`)
+        .join(", ");
+      const italic = group === "comment" ? " font-style: italic;" : "";
+      return `${selector} { color: ${color};${italic} }`;
+    })
+    .join("\n  ");
+
+  return `
+  .mpdf-doc pre {
+    background: ${background};
+    border-radius: 4px;
+    padding: 10px 12px;
+    margin: 0 0 ${s.paragraphSpacing}em;
+    overflow: hidden;
+  }
+  .mpdf-doc pre code {
+    font-family: 'Courier New', monospace;
+    font-size: ${s.codeFontSize}em;
+    color: ${text};
+    white-space: pre-wrap;
+    word-break: break-all;
+    background: none;
+    padding: 0;
+  }
+  ${tokenRules}`;
+}
+
 // ─── CSS generator ────────────────────────────────────────────────────────────
 
 /** Returns relative luminance (0–1) of a CSS hex color; non-hex values return 1 (treat as light). */
@@ -556,22 +709,7 @@ function buildDocCSS(s: PDFExportSettings, isRTL = false): string {
     border-radius: 3px;
     color: ${s.accentColor};
   }
-  .mpdf-doc pre {
-    background: ${s.codeBackground};
-    border-radius: 4px;
-    padding: 10px 12px;
-    margin: 0 0 ${s.paragraphSpacing}em;
-    overflow: hidden;
-  }
-  .mpdf-doc pre code {
-    font-family: 'Courier New', monospace;
-    font-size: ${s.codeFontSize}em;
-    color: ${s.bodyColor};
-    white-space: pre-wrap;
-    word-break: break-all;
-    background: none;
-    padding: 0;
-  }
+  ${buildCodeBlockCSS(s)}
   .mpdf-doc hr {
     border: none;
     border-top: 0.5px solid ${s.accentColor}44;
@@ -687,7 +825,7 @@ function extractDocStyle(s: PDFExportSettings): DocStyle {
     h1BorderBottom: s.h1BorderBottom, h2BorderBottom: s.h2BorderBottom,
     centerH1: s.centerH1, blockquoteBg: s.blockquoteBg,
     blockquoteBorderColor: s.blockquoteBorderColor, codeBackground: s.codeBackground,
-    codeFontSize: s.codeFontSize, tableHeaderBg: s.tableHeaderBg,
+    codeFontSize: s.codeFontSize, codeTheme: s.codeTheme, tableHeaderBg: s.tableHeaderBg,
     tableStriped: s.tableStriped, pageBackground: s.pageBackground,
     marginTop: s.marginTop, marginBottom: s.marginBottom,
     marginLeft: s.marginLeft, marginRight: s.marginRight,
@@ -756,6 +894,7 @@ function trimLeadingWhitespace(el: HTMLElement): void {
 function buildInlineSplitAt(
   el: HTMLElement,
   splitOffset: number,
+  trimSecond = true,
 ): [HTMLElement, HTMLElement] | null {
   const walker = activeDocument.createTreeWalker(el, NodeFilter.SHOW_TEXT);
   let count = 0;
@@ -788,7 +927,7 @@ function buildInlineSplitAt(
 
   const second = el.cloneNode(false) as HTMLElement;
   second.appendChild(range2.cloneContents());
-  trimLeadingWhitespace(second);
+  if (trimSecond) trimLeadingWhitespace(second);
 
   return [first, second];
 }
@@ -931,19 +1070,20 @@ function splitTableElement(
 }
 
 // ── PRE splitter ─────────────────────────────────────────────────────────────
-// Splits by lines, preserving the inner <code> wrapper for correct styling.
+// Splits a code block by line. When a <code> child is present (true for all
+// fenced code blocks), buildInlineSplitAt's Range-based split preserves the
+// nested Prism `.token.*` span structure across the break.
 
-function buildPreWithLines(preEl: HTMLElement, lines: string[]): HTMLElement {
-  const clone = preEl.cloneNode(false) as HTMLElement;
-  const codeEl = preEl.querySelector("code");
-  if (codeEl) {
-    const codeClone = codeEl.cloneNode(false) as HTMLElement;
-    codeClone.textContent = lines.join("\n");
-    clone.appendChild(codeClone);
-  } else {
-    clone.textContent = lines.join("\n");
+/** Character offsets (within the element's full text content) marking the
+ *  start of the line *after* each line — i.e. valid split points. */
+function getLineEndOffsets(lines: string[]): number[] {
+  const offsets: number[] = [];
+  let offset = 0;
+  for (const line of lines) {
+    offset += line.length + 1; // +1 for the newline separating this line from the next
+    offsets.push(offset);
   }
-  return clone;
+  return offsets;
 }
 
 function splitPreElement(
@@ -951,27 +1091,51 @@ function splitPreElement(
   fits: (node: HTMLElement) => boolean,
   forceSplit: boolean,
 ): [HTMLElement, HTMLElement] | null {
-  const lines = (preEl.textContent ?? "").split("\n");
+  const codeEl = preEl.querySelector("code");
+  const lines = (codeEl ?? preEl).textContent?.split("\n") ?? [];
   // Drop the trailing empty string that String.split() produces.
   if (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
   if (lines.length < 2) return null;
 
+  const lineEndOffsets = getLineEndOffsets(lines);
+
+  // Splits at the boundary after the first `n` lines, preserving syntax
+  // highlighting via Range.cloneContents() when a <code> child is present.
+  const buildSplit = (n: number): [HTMLElement, HTMLElement] | null => {
+    if (!codeEl) {
+      const clone = (text: string) => {
+        const el = preEl.cloneNode(false) as HTMLElement;
+        el.textContent = text;
+        return el;
+      };
+      return [clone(lines.slice(0, n).join("\n")), clone(lines.slice(n).join("\n"))];
+    }
+    const split = buildInlineSplitAt(codeEl, lineEndOffsets[n - 1], false);
+    if (!split) return null;
+    const first = preEl.cloneNode(false) as HTMLElement;
+    first.appendChild(split[0]);
+    const second = preEl.cloneNode(false) as HTMLElement;
+    second.appendChild(split[1]);
+    return [first, second];
+  };
+
+  let best: [HTMLElement, HTMLElement] | null = null;
   let fitCount = 0;
-  for (let i = 0; i < lines.length; i++) {
-    if (fits(buildPreWithLines(preEl, lines.slice(0, i + 1)))) fitCount = i + 1;
-    else break;
+  for (let i = 1; i <= lines.length; i++) {
+    const candidate = buildSplit(i);
+    if (!candidate || !fits(candidate[0])) break;
+    best = candidate;
+    fitCount = i;
   }
 
   if (fitCount <= 0) {
-    if (!forceSplit || lines.length < 2) return null;
+    if (!forceSplit) return null;
+    best = buildSplit(1);
     fitCount = 1;
   }
-  if (fitCount >= lines.length) return null;
+  if (fitCount >= lines.length || !best) return null;
 
-  return [
-    buildPreWithLines(preEl, lines.slice(0, fitCount)),
-    buildPreWithLines(preEl, lines.slice(fitCount)),
-  ];
+  return best;
 }
 
 // ── Element splitter dispatcher ──────────────────────────────────────────────
@@ -1182,6 +1346,11 @@ export default class MarkdownPDFPlugin extends Plugin {
   async loadSettings() {
     const data = (await this.loadData() ?? {}) as Partial<PDFExportSettings> & { presetSnapshots?: Record<string, DocStyle> };
     this.settings = Object.assign({}, DEFAULT_SETTINGS, data);
+    // Settings saved before per-preset code themes existed default to the
+    // "default" preset's theme above; align them with the active preset instead.
+    if (data.codeTheme === undefined) {
+      this.settings.codeTheme = PRESETS[this.settings.preset]?.codeTheme ?? DEFAULT_SETTINGS.codeTheme;
+    }
     this.presetSnapshots = data.presetSnapshots ?? {};
   }
 
@@ -2053,6 +2222,17 @@ class PDFExportSettingTab extends PluginSettingTab {
     colorSetting("Blockquote border",       "blockquoteBorderColor");
     colorSetting("Table header background", "tableHeaderBg");
     colorSetting("Code background",         "codeBackground");
+
+    new Setting(containerEl)
+      .setName("Code syntax theme")
+      .setDesc("Colors fenced code blocks via Obsidian's syntax-highlighting token classes, independent of your Obsidian theme. \"None\" uses the body text color and code background above with no highlighting.")
+      .addDropdown((d) => {
+        const opts: Record<string, string> = {};
+        for (const [key, theme] of Object.entries(CODE_THEMES)) opts[key] = theme.name;
+        d.addOptions(opts)
+         .setValue(s.codeTheme)
+         .onChange((v) => { s.codeTheme = v; void this.markDirty(); });
+      });
 
     // ── Heading style ─────────────────────────────────────────────────────────
     new Setting(containerEl).setName("Heading Style").setHeading();
