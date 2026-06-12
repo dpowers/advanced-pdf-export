@@ -433,6 +433,12 @@ function postProcessRenderedHTML(root: HTMLElement): void {
   // The external-link class triggers a ↗ icon via theme CSS — meaningless in print.
   root.querySelectorAll<HTMLAnchorElement>("a").forEach((a) => {
     a.classList.remove("external-link");
+    
+    //Wikilinks
+    const target = a.getAttribute("data-href") ?? a.getAttribute("href");
+    if (target?.startsWith("#")) {
+      a.setAttribute("href", "#" + slugifyHeading(target.slice(1)));
+    }
   });
 
   root.querySelectorAll(".copy-code-button").forEach((el) => el.remove());
