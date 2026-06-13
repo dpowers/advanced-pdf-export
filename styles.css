@@ -266,6 +266,31 @@
   accent-color: var(--interactive-accent);
 }
 
+/* Number inputs for the custom page-size control in the topbar */
+.mpdf-custom-size-input {
+  width: 52px;
+  background: var(--background-primary);
+  color: var(--text-normal);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 4px;
+  font-size: 12px;
+  padding: 3px 5px;
+  outline: none;
+  /* Suppress native spinners so the compact topbar stays tidy */
+  -moz-appearance: textfield;
+}
+
+.mpdf-custom-size-input::-webkit-outer-spin-button,
+.mpdf-custom-size-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.mpdf-custom-size-input:hover,
+.mpdf-custom-size-input:focus {
+  border-color: var(--interactive-accent);
+}
+
 /* Utility: toggle visibility without affecting layout flow */
 .is-hidden {
   display: none !important;

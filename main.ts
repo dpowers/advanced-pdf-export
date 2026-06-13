@@ -54,6 +54,7 @@ interface ElectronBrowserWindow {
       pageSize: string;
       landscape: boolean;
       printBackground: boolean;
+      preferCSSPageSize?: boolean;
       margins: { marginType: string };
     }): Promise<Buffer>;
   };
@@ -110,6 +111,10 @@ interface PDFExportSettings extends DocStyle {
   autoBreakH2: boolean;
   includeFilenameAsTitle: boolean;
   previewScale: number;
+  /** Width in mm, used only when pageSize === "Custom". */
+  customPageWidth: number;
+  /** Height in mm, used only when pageSize === "Custom". */
+  customPageHeight: number;
 }
 
 // Cached layout — holds everything drawPreview and exportPDF need so that
@@ -331,12 +336,29 @@ const DEFAULT_SETTINGS: PDFExportSettings = {
   autoBreakH2: false,
   includeFilenameAsTitle: false,
   previewScale: 0.90,
+  customPageWidth: 210,   // A4 width in mm
+  customPageHeight: 297,  // A4 height in mm
 };
 
 // ─── Utilities ────────────────────────────────────────────────────────────────
 
 /** mm → px at 96 dpi, matching Electron's print pipeline. */
 const mmToPx = (mm: number) => (mm / 25.4) * 96;
+
+/**
+ * Returns the page dimensions in px for the current settings.
+ * For "Custom", converts the user-entered mm values; for named sizes, looks up
+ * PAGE_SIZES directly.  Orientation swapping is handled by callers (doRender).
+ */
+function resolvePageDims(s: PDFExportSettings): { w: number; h: number } {
+  if (s.pageSize === "Custom") {
+    return {
+      w: Math.max(1, Math.round(mmToPx(s.customPageWidth))),
+      h: Math.max(1, Math.round(mmToPx(s.customPageHeight))),
+    };
+  }
+  return PAGE_SIZES[s.pageSize] ?? PAGE_SIZES["A4"];
+}
 
 function escapeHTML(s: string): string {
   return s
@@ -1544,10 +1566,44 @@ class PDFExportModal extends Modal {
 
     const sizeOpts: Record<string, string> = {};
     Object.keys(PAGE_SIZES).forEach((k) => (sizeOpts[k] = k));
-    makeSelect("Size", sizeOpts, s.pageSize, async (v) => {
-      this.plugin.settings.pageSize = v;
+    sizeOpts["Custom"] = "Custom";
+
+    // Build the size control manually so we can show/hide the custom-dims inputs.
+    const sizeCtrl = left.createEl("div", { cls: "mpdf-ctrl" });
+    sizeCtrl.createEl("span", { cls: "mpdf-ctrl-label", text: "Size" });
+    const sizeSelect = sizeCtrl.createEl("select", { cls: "mpdf-select" });
+    for (const [v, t] of Object.entries(sizeOpts)) {
+      const o = sizeSelect.createEl("option", { text: t, value: v });
+      if (v === s.pageSize) o.selected = true;
+    }
+
+    // Custom W×H inputs — visible only when "Custom" is active.
+    const customCtrl = left.createEl("div", { cls: "mpdf-ctrl" });
+    customCtrl.toggleClass("is-hidden", s.pageSize !== "Custom");
+
+    const makeNumInput = (label: string, val: number): HTMLInputElement => {
+      customCtrl.createEl("span", { cls: "mpdf-ctrl-label", text: label });
+      const inp = customCtrl.createEl("input", { cls: "mpdf-custom-size-input" });
+      inp.type = "number"; inp.min = "10"; inp.step = "1"; inp.value = String(val);
+      return inp;
+    };
+    const wInp = makeNumInput("W", s.customPageWidth);
+    const hInp = makeNumInput("H", s.customPageHeight);
+    customCtrl.createEl("span", { cls: "mpdf-ctrl-label", text: "mm" });
+
+    sizeSelect.addEventListener("change", async () => {
+      this.plugin.settings.pageSize = sizeSelect.value;
+      customCtrl.toggleClass("is-hidden", sizeSelect.value !== "Custom");
       await this.plugin.saveSettingsAndRender();
     });
+
+    const applyCustomDims = async () => {
+      this.plugin.settings.customPageWidth  = Math.max(10, parseFloat(wInp.value)  || 210);
+      this.plugin.settings.customPageHeight = Math.max(10, parseFloat(hInp.value) || 297);
+      await this.plugin.saveSettingsAndRender();
+    };
+    wInp.addEventListener("change", () => void applyCustomDims());
+    hInp.addEventListener("change", () => void applyCustomDims());
 
     makeSelect("Orient", { portrait: "Portrait", landscape: "Landscape" }, s.orientation,
       async (v) => {
@@ -1697,7 +1753,7 @@ class PDFExportModal extends Modal {
     md = PDFExportModal.insertAutoBreaks(md, s.autoBreakH1, s.autoBreakH2);
 
     const sections = splitMarkdownSections(md);
-    const dims = PAGE_SIZES[s.pageSize] ?? PAGE_SIZES["A4"];
+    const dims = resolvePageDims(s);
     const pw = s.orientation === "landscape" ? dims.h : dims.w;
     const ph = s.orientation === "landscape" ? dims.w : dims.h;
 
@@ -2042,8 +2098,21 @@ ${pageHTMLParts.join("\n")}
       win.webContents.once("did-finish-load", () => {
         if (exportHandled) return;
         exportHandled = true;
+
+        // For named sizes: pass the size string + landscape flag — same as before.
+        // For Custom: the export HTML already has `@page { size: ${pw}px ${ph}px }`
+        // and the page divs are sized to match. preferCSSPageSize tells Electron to
+        // use that @page rule as the authoritative page size rather than pageSize.
+        // The placeholder "A4" is never used when preferCSSPageSize is true.
+        const isCustom = s.pageSize === "Custom";
         win.webContents
-          .printToPDF({ pageSize: s.pageSize, landscape: s.orientation === "landscape", printBackground: true, margins: { marginType: "none" } })
+          .printToPDF({
+            pageSize:          isCustom ? "A4" : s.pageSize,
+            landscape:         !isCustom && s.orientation === "landscape",
+            preferCSSPageSize: isCustom,
+            printBackground:   true,
+            margins:           { marginType: "none" },
+          })
           .then((data: Buffer) => {
             electron.require("fs").writeFile(res.filePath!, data, (err: Error | null) => {
               if (err) new Notice("Error saving PDF: " + err.message);
@@ -2136,13 +2205,31 @@ class PDFExportSettingTab extends PluginSettingTab {
 
     // ── Page ──────────────────────────────────────────────────────────────────
     new Setting(containerEl).setName("Page").setHeading();
+
+    let customPageSizeSetting: Setting;
+
     new Setting(containerEl).setName("Page size").addDropdown((d) => {
       Object.keys(PAGE_SIZES).forEach((k) => { d.addOption(k, k); });
+      d.addOption("Custom", "Custom…");
       d.setValue(s.pageSize).onChange((v) => {
         s.pageSize = v;
+        customPageSizeSetting.settingEl.toggleClass("is-hidden", v !== "Custom");
         void this.markDirty();
       });
     });
+
+    customPageSizeSetting = new Setting(containerEl)
+      .setName("Custom page size (mm)")
+      .setDesc("Width × Height in millimetres.")
+      .addText((t) =>
+        t.setPlaceholder("Width").setValue(String(s.customPageWidth))
+         .onChange((v) => { s.customPageWidth  = parseFloat(v) || 210; void this.markDirty(); }),
+      )
+      .addText((t) =>
+        t.setPlaceholder("Height").setValue(String(s.customPageHeight))
+         .onChange((v) => { s.customPageHeight = parseFloat(v) || 297; void this.markDirty(); }),
+      );
+    customPageSizeSetting.settingEl.toggleClass("is-hidden", s.pageSize !== "Custom");
     new Setting(containerEl).setName("Orientation").addDropdown((d) =>
       d.addOptions({ portrait: "Portrait", landscape: "Landscape" })
        .setValue(s.orientation)
