@@ -20,12 +20,14 @@ Export Obsidian notes as pixel-perfect PDFs with seven style presets, manual pag
 ## Features
 
 - **Live preview** — markdown editor on the left, paginated page preview on the right; render with **⟳ Render PDF** or `Ctrl+Enter`
-- **Auto-loads active note** — opening from a note's right-click menu or command palette pre-fills the editor (edits are local, non-destructive)
-- **Seven style presets** — Default, Minimal, Academic, Colorful, Modern, Newspaper, Dark
+- **Auto-loads active note** — opening from the right-click menu or command palette pre-fills the editor (edits are local, non-destructive)
+- **Seven style presets** — Default, Minimal, Academic, Colorful, Modern, Newspaper, Dark; each fully customisable and resettable
+- **Code syntax themes** — 10+ themes (GitHub Light/Dark, Dracula, Tokyo Night, Monokai, Catppuccin, and more) applied independently of your Obsidian theme
+- **Mermaid diagrams** — renders flowcharts, sequence diagrams, and all other Mermaid diagram types
 - **Page breaks** — `///` on its own line for a manual break; optionally auto-insert before every H1 or H2
-- **Page size & orientation** — A4, A3, A5, Letter, Legal × Portrait / Landscape
-- **Full layout control** — margins, font family/size/line height, paragraph spacing, heading scale, code font size, colors, heading borders, striped tables
-- **Header & footer** — custom text, page numbers (X / Y), alignment, and first-page control
+- **Page size & orientation** — A4, A3, A5, Letter, Legal, or a fully custom size (mm) × Portrait / Landscape
+- **Full layout control** — margins, font family/size/line height, paragraph spacing, heading scale, colors, heading borders, striped tables
+- **Header & footer** — custom text, page numbers (X / Y), alignment, optional separator borders, and first-page suppression
 
 
 ## Screenshots
@@ -96,7 +98,8 @@ All settings take effect after closing the settings panel.
 ### Page
 | Setting | Description |
 |---|---|
-| Page size | A4, A3, A5, Letter, Legal |
+| Page size | A4, A3, A5, Letter, Legal, or Custom |
+| Custom page size | Width × Height in mm (visible only when Custom is selected) |
 | Orientation | Portrait or Landscape |
 | Margins (Top / Bottom / Left / Right) | In mm |
 
@@ -112,7 +115,11 @@ All settings take effect after closing the settings panel.
 | Heading scale | 0.8× → 1.2× multiplier applied to all heading sizes |
 
 ### Colors
-Accent · Body text · Headings · Page background · Blockquote background · Blockquote border · Table header background · Code background
+Eight color pickers: Accent · Body text · Headings · Page background · Blockquote background · Blockquote border · Table header background · Code background
+
+| Setting | Description |
+|---|---|
+| Code syntax theme | Colors fenced code blocks independently of your Obsidian theme. Options: None, GitHub Light, GitHub Dark, Atom One Light/Dark, Monokai, Dracula, Tokyo Night, Solarized Light, Catppuccin Macchiato/Mocha |
 
 ### Heading Style
 | Setting | Description |
@@ -132,9 +139,10 @@ Accent · Body text · Headings · Page background · Blockquote background · B
 | Show header | Toggle the header on or off |
 | Header text | Custom text shown on every page |
 | Header alignment | Left, Center, or Right |
+| Header border | Separator line below the header |
 | Show footer | Toggle the footer on or off |
-| Footer border | Show a separator line above the footer |
 | Footer text | Custom text shown in the footer |
+| Footer border | Separator line above the footer |
 | Show page numbers | Toggle *Page X / Y* display |
 | Page number position | Left, Center, or Right |
 | Page number start | Number assigned to the first visible page (default 1) |
