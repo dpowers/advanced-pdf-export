@@ -99,6 +99,7 @@ interface PDFExportSettings extends DocStyle {
   footerText: string;
   showHeader: boolean;
   showFooter: boolean;
+  showHeaderBorder: boolean;
   showFooterBorder: boolean;
   showPageNumbers: boolean;
   pageNumberPosition: "center" | "left" | "right";
@@ -324,6 +325,7 @@ const DEFAULT_SETTINGS: PDFExportSettings = {
   footerText: "",
   showHeader: true,
   showFooter: true,
+  showHeaderBorder: false,
   showFooterBorder: false,
   showPageNumbers: true,
   pageNumberPosition: "right",
@@ -1899,6 +1901,7 @@ class PDFExportModal extends Modal {
           position: "absolute", top: `${mTop * 0.4}px`, left: `${mLeft}px`, right: `${mRight}px`,
           display: "flex", alignItems: "center",
           fontSize: "9px", color: "#999", fontFamily: fontFamily, whiteSpace: "nowrap",
+          ...(s.showHeaderBorder ? { borderBottom: `0.5px solid ${accentColor}33` } : {}),
         });
         appendHFNodes(hdr, layout.headerCenter, layout.headerLeft, layout.headerRight);
         shadow.appendChild(hdr);
@@ -2004,8 +2007,9 @@ class PDFExportModal extends Modal {
       }).join("\n");
 
       const hasExportHeader = s.showHeader && (layout.headerLeft || layout.headerCenter || layout.headerRight);
+      const headerBorder = s.showHeaderBorder ? `border-bottom:0.5px solid ${exportAccent}33;` : "";
       const headerHTML = hasExportHeader
-        ? `<div style="position:absolute;top:${mTop * 0.4}px;left:${mLeft}px;right:${mRight}px;display:flex;align-items:center;font-size:9px;color:#999;font-family:${fontFamily};white-space:nowrap;">${buildHFInnerHTML(layout.headerCenter, layout.headerLeft, layout.headerRight)}</div>`
+        ? `<div style="position:absolute;top:${mTop * 0.4}px;left:${mLeft}px;right:${mRight}px;display:flex;align-items:center;font-size:9px;color:#999;font-family:${fontFamily};white-space:nowrap;${headerBorder}">${buildHFInnerHTML(layout.headerCenter, layout.headerLeft, layout.headerRight)}</div>`
         : "";
 
       const hasExportFooter = s.showFooter && (layout.footerLeft || layout.footerRight || layout.footerCenter);
@@ -2349,6 +2353,9 @@ class PDFExportSettingTab extends PluginSettingTab {
       d.addOptions({ left: "Left", center: "Center", right: "Right" })
        .setValue(s.headerAlignment)
        .onChange((v) => { s.headerAlignment = v as "left"|"center"|"right"; void this.markDirty(); }),
+    );
+    new Setting(containerEl).setName("Header border").setDesc("Show the separator line below the header.").addToggle((t) =>
+      t.setValue(s.showHeaderBorder).onChange((v) => { s.showHeaderBorder = v; void this.markDirty(); }),
     );
     new Setting(containerEl).setName("Show footer").addToggle((t) =>
       t.setValue(s.showFooter).onChange((v) => { s.showFooter = v; void this.markDirty(); }),
