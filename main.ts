@@ -1579,7 +1579,7 @@ class PDFExportModal extends Modal {
 
     // Custom W×H inputs — visible only when "Custom" is active.
     const customCtrl = left.createEl("div", { cls: "mpdf-ctrl" });
-    customCtrl.toggleClass("is-hidden", s.pageSize !== "Custom");
+    customCtrl.toggleClass("mpdf-is-hidden", s.pageSize !== "Custom");
 
     const makeNumInput = (label: string, val: number): HTMLInputElement => {
       customCtrl.createEl("span", { cls: "mpdf-ctrl-label", text: label });
@@ -1593,7 +1593,7 @@ class PDFExportModal extends Modal {
 
     sizeSelect.addEventListener("change", async () => {
       this.plugin.settings.pageSize = sizeSelect.value;
-      customCtrl.toggleClass("is-hidden", sizeSelect.value !== "Custom");
+      customCtrl.toggleClass("mpdf-is-hidden", sizeSelect.value !== "Custom");
       await this.plugin.saveSettingsAndRender();
     });
 
@@ -1800,13 +1800,13 @@ class PDFExportModal extends Modal {
   }
 
   private showLoading() {
-    this.loadingOverlayEl.addClass("is-active");
+    this.loadingOverlayEl.addClass("mpdf-is-active");
     this.renderBtn.disabled = true;
     this.renderBtn.textContent = "Rendering…";
   }
 
   private hideLoading() {
-    this.loadingOverlayEl.removeClass("is-active");
+    this.loadingOverlayEl.removeClass("mpdf-is-active");
     this.renderBtn.disabled = false;
     this.renderBtn.textContent = "⟳ Render PDF";
   }
@@ -2213,7 +2213,7 @@ class PDFExportSettingTab extends PluginSettingTab {
       d.addOption("Custom", "Custom…");
       d.setValue(s.pageSize).onChange((v) => {
         s.pageSize = v;
-        customPageSizeSetting.settingEl.toggleClass("is-hidden", v !== "Custom");
+        customPageSizeSetting.settingEl.toggleClass("mpdf-is-hidden", v !== "Custom");
         void this.markDirty();
       });
     });
@@ -2223,13 +2223,13 @@ class PDFExportSettingTab extends PluginSettingTab {
       .setDesc("Width × Height in millimetres.")
       .addText((t) =>
         t.setPlaceholder("Width").setValue(String(s.customPageWidth))
-         .onChange((v) => { s.customPageWidth  = parseFloat(v) || 210; void this.markDirty(); }),
+         .onChange((v) => { s.customPageWidth  = Math.max(1, parseFloat(v) || 210); void this.markDirty(); }),
       )
       .addText((t) =>
         t.setPlaceholder("Height").setValue(String(s.customPageHeight))
-         .onChange((v) => { s.customPageHeight = parseFloat(v) || 297; void this.markDirty(); }),
+         .onChange((v) => { s.customPageHeight = Math.max(1, parseFloat(v) || 297); void this.markDirty(); }),
       );
-    customPageSizeSetting.settingEl.toggleClass("is-hidden", s.pageSize !== "Custom");
+    customPageSizeSetting.settingEl.toggleClass("mpdf-is-hidden", s.pageSize !== "Custom");
     new Setting(containerEl).setName("Orientation").addDropdown((d) =>
       d.addOptions({ portrait: "Portrait", landscape: "Landscape" })
        .setValue(s.orientation)
@@ -2270,7 +2270,7 @@ class PDFExportSettingTab extends PluginSettingTab {
       }).setValue(s.fontFamily)
        .onChange((v) => {
          s.fontFamily = v;
-         customFontSetting.settingEl.toggleClass("is-hidden", v !== "__custom__");
+         customFontSetting.settingEl.toggleClass("mpdf-is-hidden", v !== "__custom__");
          void this.markDirty();
        }),
     );
@@ -2282,7 +2282,7 @@ class PDFExportSettingTab extends PluginSettingTab {
          .setValue(s.customFontName)
          .onChange((v) => { s.customFontName = v; void this.markDirty(); }),
       );
-    customFontSetting.settingEl.toggleClass("is-hidden", s.fontFamily !== "__custom__");
+    customFontSetting.settingEl.toggleClass("mpdf-is-hidden", s.fontFamily !== "__custom__");
     new Setting(containerEl).setName("Font size (px)").addDropdown((d) => {
       ["10","11","12","13","14","15","16"].forEach((v) => { d.addOption(v, v + "px"); });
       d.setValue(String(s.fontSize)).onChange((v) => {
