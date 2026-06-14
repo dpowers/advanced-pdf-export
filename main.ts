@@ -1360,6 +1360,7 @@ function buildPageLayouts(allPages: HTMLElement[][], s: PDFExportSettings): Page
 
 /** Appends center-or-left/right span nodes into a header/footer container element. */
 function appendHFNodes(container: HTMLElement, center: string, left: string, right: string): void {
+  if (!center && !left && !right) return;
   if (center) {
     const span = activeDocument.createElement("span");
     span.className = "mpdf-hf-center";
@@ -1378,6 +1379,7 @@ function appendHFNodes(container: HTMLElement, center: string, left: string, rig
 
 /** Returns the inner HTML string for a header/footer bar (used in export HTML). */
 function buildHFInnerHTML(center: string, left: string, right: string): string {
+  if (!center && !left && !right) return "";
   return center
     ? `<span style="flex:1;text-align:center;">${escapeHTML(center)}</span>`
     : `<span>${escapeHTML(left)}</span><span style="margin-left:auto;">${escapeHTML(right)}</span>`;
@@ -1785,8 +1787,8 @@ class PDFExportModal extends Modal {
     const mBottom = mmToPx(s.marginBottom);
     const mLeft   = mmToPx(s.marginLeft);
     const mRight  = mmToPx(s.marginRight);
-    const footerH = s.showFooter && (s.showPageNumbers || !!s.footerText) ? 28 : 0;
-    const headerH = s.showHeader && !!s.headerText ? 20 : 0;
+    const footerH = s.showFooter && (s.showPageNumbers || !!s.footerText || s.showFooterBorder) ? 28 : 0;
+    const headerH = s.showHeader && (!!s.headerText || s.showHeaderBorder) ? 20 : 0;
     // Clamp to at least 1 px so the paginator sandbox never has zero dimensions.
     const contentW = Math.max(1, pw - mLeft - mRight);
     const contentH = Math.max(1, ph - mTop - mBottom - footerH - headerH);
@@ -1894,7 +1896,8 @@ class PDFExportModal extends Modal {
       shadow.adoptedStyleSheets = [pageSheet];
 
       // ── Header ───────────────────────────────────────────────────────────────
-      const hasHeader = s.showHeader && (layout.headerLeft || layout.headerCenter || layout.headerRight);
+      const pageShowsHF = s.showHeaderFooterOnFirstPage || layout.pageNum > 1;
+      const hasHeader = s.showHeader && pageShowsHF && (layout.headerLeft || layout.headerCenter || layout.headerRight || s.showHeaderBorder);
       if (hasHeader) {
         const hdr = activeDocument.createElement("div");
         hdr.setCssStyles({
@@ -1936,8 +1939,7 @@ class PDFExportModal extends Modal {
       });
 
       // ── Footer ───────────────────────────────────────────────────────────────
-      // Skip empty footer divs (e.g. page 1 when showHeaderFooterOnFirstPage is off).
-      const hasFooter = s.showFooter && (layout.footerLeft || layout.footerRight || layout.footerCenter);
+      const hasFooter = s.showFooter && pageShowsHF && (layout.footerLeft || layout.footerRight || layout.footerCenter || s.showFooterBorder);
       if (hasFooter) {
         const footer = activeDocument.createElement("div");
         footer.setCssStyles({
@@ -1946,7 +1948,6 @@ class PDFExportModal extends Modal {
           ...(s.showFooterBorder ? { borderTop: `0.5px solid ${accentColor}33` } : {}),
           padding: `0 ${mRight}px 0 ${mLeft}px`, fontSize: "9px", color: "#aaa", fontFamily: fontFamily,
         });
-
         appendHFNodes(footer, layout.footerCenter, layout.footerLeft, layout.footerRight);
         shadow.appendChild(footer);
       }
@@ -2006,13 +2007,15 @@ class PDFExportModal extends Modal {
         return clone.outerHTML;
       }).join("\n");
 
-      const hasExportHeader = s.showHeader && (layout.headerLeft || layout.headerCenter || layout.headerRight);
+      const pageShowsHF = s.showHeaderFooterOnFirstPage || layout.pageNum > 1;
+
+      const hasExportHeader = s.showHeader && pageShowsHF && (layout.headerLeft || layout.headerCenter || layout.headerRight || s.showHeaderBorder);
       const headerBorder = s.showHeaderBorder ? `border-bottom:0.5px solid ${exportAccent}33;` : "";
       const headerHTML = hasExportHeader
         ? `<div style="position:absolute;top:${mTop * 0.4}px;left:${mLeft}px;right:${mRight}px;display:flex;align-items:center;font-size:9px;color:#999;font-family:${fontFamily};white-space:nowrap;${headerBorder}">${buildHFInnerHTML(layout.headerCenter, layout.headerLeft, layout.headerRight)}</div>`
         : "";
 
-      const hasExportFooter = s.showFooter && (layout.footerLeft || layout.footerRight || layout.footerCenter);
+      const hasExportFooter = s.showFooter && pageShowsHF && (layout.footerLeft || layout.footerRight || layout.footerCenter || s.showFooterBorder);
       const footerBorder = s.showFooterBorder ? `border-top:0.5px solid ${exportAccent}33;` : "";
       const footerHTML = hasExportFooter
         ? `<div style="position:absolute;bottom:0;left:0;right:0;height:${footerH}px;display:flex;align-items:center;${footerBorder}padding:0 ${mRight}px 0 ${mLeft}px;font-size:9px;color:#aaa;font-family:${fontFamily};">${buildHFInnerHTML(layout.footerCenter, layout.footerLeft, layout.footerRight)}</div>`
@@ -2360,12 +2363,12 @@ class PDFExportSettingTab extends PluginSettingTab {
     new Setting(containerEl).setName("Show footer").addToggle((t) =>
       t.setValue(s.showFooter).onChange((v) => { s.showFooter = v; void this.markDirty(); }),
     );
-    new Setting(containerEl).setName("Footer border").setDesc("Show the separator line above the footer.").addToggle((t) =>
-      t.setValue(s.showFooterBorder).onChange((v) => { s.showFooterBorder = v; void this.markDirty(); }),
-    );
     new Setting(containerEl)
       .setName("Footer text")
       .addText((t) => t.setValue(s.footerText).onChange((v) => { s.footerText = v; void this.markDirty(); }));
+    new Setting(containerEl).setName("Footer border").setDesc("Show the separator line above the footer.").addToggle((t) =>
+      t.setValue(s.showFooterBorder).onChange((v) => { s.showFooterBorder = v; void this.markDirty(); }),
+    );
     new Setting(containerEl).setName("Show page numbers").addToggle((t) =>
       t.setValue(s.showPageNumbers).onChange((v) => { s.showPageNumbers = v; void this.markDirty(); }),
     );
