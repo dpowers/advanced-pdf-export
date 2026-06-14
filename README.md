@@ -84,11 +84,6 @@ Search for **Advanced PDF Export** in **Settings → Community Plugins → Brows
 
 All settings take effect after closing the settings panel.
 
-<img src="screenshots/settings1.png" width="75%" />
-<img src="screenshots/settings2.png" width="75%" />
-<img src="screenshots/settings3.png" width="75%" />
-<img src="screenshots/settings4.png" width="75%" />
-
 ### Style Preset
 | Setting | Description |
 |---|---|
