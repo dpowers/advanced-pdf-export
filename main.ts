@@ -2313,7 +2313,7 @@ class PDFExportSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Code syntax theme")
-      .setDesc("Colors fenced code blocks via Obsidian's syntax-highlighting token classes, independent of your Obsidian theme. \"None\" uses the body text color and code background above with no highlighting.")
+      .setDesc("Independent of your Obsidian theme. \"None\" uses the body text color and code background above with no highlighting.")
       .addDropdown((d) => {
         const opts: Record<string, string> = {};
         for (const [key, theme] of Object.entries(CODE_THEMES)) opts[key] = theme.name;
@@ -2409,8 +2409,7 @@ class PDFExportSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName("Include file name as title")
       .setDesc(
-        "Prepend the note's file name as an H1 heading at the top of the PDF. " +
-        "Mirrors Obsidian's built-in 'Include file name as title' export option.",
+        "Prepend the note's file name as an H1 heading at the top of the PDF.",
       )
       .addToggle((t) =>
         t.setValue(s.includeFilenameAsTitle).onChange((v) => {
