@@ -391,9 +391,9 @@ function normalizeMarkdown(raw: string): string {
   return raw.replace(/\r\n/g, "\n");
 }
 
-/** Strips an opening YAML frontmatter block (--- … ---); returns the string unchanged if none is found. */
+/** Strips an opening YAML frontmatter block (--- … ---). Input must be LF-normalised. */
 function stripFrontmatter(md: string): string {
-  return md.replace(/^---[ \t]*\r?\n[\s\S]*?\r?\n---[ \t]*(\r?\n|$)/, "");
+  return md.replace(/^---[ \t]*\n[\s\S]*?\n---[ \t]*(\n|$)/, "");
 }
 
 /** Splits on `///` manual page-break markers, trimming and dropping empty sections. */
@@ -411,9 +411,8 @@ async function renderMarkdownToEl(
   component: Component,
 ): Promise<HTMLElement> {
   const temp = activeDocument.createElement("div");
-  // Attach offscreen to the live document so Obsidian's async code-block
-  // post-processors (including mermaid) can render into a real DOM context.
-  // The element is detached again before being returned.
+  // Attach offscreen so Obsidian's async post-processors (mermaid, math) run in a real DOM context.
+  // Detached again before returning.
   temp.setCssStyles({ position: "fixed", top: "0", left: "-99999px", visibility: "hidden", pointerEvents: "none" });
   activeDocument.body.appendChild(temp);
   try {
@@ -455,8 +454,9 @@ function postProcessRenderedHTML(root: HTMLElement): void {
   // The external-link class triggers a ↗ icon via theme CSS — meaningless in print.
   root.querySelectorAll<HTMLAnchorElement>("a").forEach((a) => {
     a.classList.remove("external-link");
-    
-    //Wikilinks
+
+    // Rewrite anchor hrefs to match the slugified IDs assigned above,
+    // covering both wikilink data-href and standard markdown anchors.
     const target = a.getAttribute("data-href") ?? a.getAttribute("href");
     if (target?.startsWith("#")) {
       a.setAttribute("href", "#" + slugifyHeading(target.slice(1)));
@@ -480,10 +480,8 @@ function postProcessRenderedHTML(root: HTMLElement): void {
   });
 }
 
-/** Waits for Obsidian's mermaid post-processor to finish converting all mermaid
- *  code blocks into rendered SVGs.  Each `.mermaid` container is watched via a
- *  MutationObserver; resolves immediately if already rendered, otherwise waits
- *  up to 5 s per diagram before timing out. */
+/** Waits for mermaid code blocks to be converted to SVGs by Obsidian's post-processor.
+ *  Resolves immediately if already rendered; times out per diagram after 5 s. */
 async function waitForMermaidDiagrams(el: HTMLElement): Promise<void> {
   const containers = Array.from(el.querySelectorAll<HTMLElement>(".mermaid"));
   if (containers.length === 0) return;
@@ -663,7 +661,7 @@ function buildCodeBlockCSS(s: PDFExportSettings): string {
     font-size: ${s.codeFontSize}em;
     color: ${text};
     white-space: pre-wrap;
-    word-break: break-all;
+    overflow-wrap: break-word;
     background: none;
     padding: 0;
   }
@@ -687,11 +685,14 @@ function hexLuminance(hex: string): number {
   return 0.2126 * r + 0.7152 * g + 0.0722 * b;
 }
 
+/** Returns the resolved CSS font-family string for the current settings. */
+function resolveFont(s: PDFExportSettings): string {
+  return s.fontFamily === "__custom__" ? (s.customFontName.trim() || "inherit") : s.fontFamily;
+}
+
 function buildDocCSS(s: PDFExportSettings, isRTL = false): string {
   const hs = s.headingScale;
-  const fontFamily = s.fontFamily === "__custom__"
-    ? (s.customFontName.trim() || "inherit")
-    : s.fontFamily;
+  const fontFamily = resolveFont(s);
   const tableHeaderTextColor =
     hexLuminance(s.tableHeaderBg) < 0.35 ? "#fff" : s.headingColor;
 
@@ -888,9 +889,9 @@ function getMathJaxCSS(): string {
 }
 
 // ─── Paginator ────────────────────────────────────────────────────────────────
-// Measures block children of the rendered HTML in a hidden, scoped sandbox and
-// distributes them into page buckets.  Oversized elements are split by their
-// natural unit: line for PRE, row for TABLE, item for UL/OL, word for text nodes.
+// Distributes rendered block children into page-height buckets. Oversized
+// elements are split by natural unit: line (PRE), row (TABLE), item (UL/OL),
+// word or character (inline text).
 
 const INLINE_SPLIT_TAGS = new Set(["P", "LI", "BLOCKQUOTE", "TD", "TH"]);
 
@@ -1216,8 +1217,7 @@ function paginateEl(
   contentHeightPx: number,
   docCSS: string,
 ): HTMLElement[][] {
-  // Off-screen shadow-root sandbox: CSS is fully scoped so it never pollutes
-  // the host document, and adoptedStyleSheets keeps the shadow tree clean.
+  // Hidden shadow-root sandbox: scoped CSS prevents host-document pollution.
   const sandboxHost = activeDocument.createElement("div");
   sandboxHost.setCssStyles({
     position: "fixed", top: "0", left: "-99999px",
@@ -1354,6 +1354,33 @@ function buildPageLayouts(allPages: HTMLElement[][], s: PDFExportSettings): Page
   });
 }
 
+// ─── Header / footer rendering helpers ───────────────────────────────────────
+
+/** Appends center-or-left/right span nodes into a header/footer container element. */
+function appendHFNodes(container: HTMLElement, center: string, left: string, right: string): void {
+  if (center) {
+    const span = activeDocument.createElement("span");
+    span.className = "mpdf-hf-center";
+    span.textContent = center;
+    container.appendChild(span);
+  } else {
+    const leftSpan = activeDocument.createElement("span");
+    leftSpan.textContent = left;
+    container.appendChild(leftSpan);
+    const rightSpan = activeDocument.createElement("span");
+    rightSpan.className = "mpdf-hf-right";
+    rightSpan.textContent = right;
+    container.appendChild(rightSpan);
+  }
+}
+
+/** Returns the inner HTML string for a header/footer bar (used in export HTML). */
+function buildHFInnerHTML(center: string, left: string, right: string): string {
+  return center
+    ? `<span style="flex:1;text-align:center;">${escapeHTML(center)}</span>`
+    : `<span>${escapeHTML(left)}</span><span style="margin-left:auto;">${escapeHTML(right)}</span>`;
+}
+
 // ─── Plugin ───────────────────────────────────────────────────────────────────
 
 export default class MarkdownPDFPlugin extends Plugin {
@@ -1392,8 +1419,7 @@ export default class MarkdownPDFPlugin extends Plugin {
   async loadSettings() {
     const data = (await this.loadData() ?? {}) as Partial<PDFExportSettings> & { presetSnapshots?: Record<string, DocStyle> };
     this.settings = Object.assign({}, DEFAULT_SETTINGS, data);
-    // Settings saved before per-preset code themes existed default to the
-    // "default" preset's theme above; align them with the active preset instead.
+    // Migration: codeTheme was added per-preset; absent value adopts the active preset's default.
     if (data.codeTheme === undefined) {
       this.settings.codeTheme = PRESETS[this.settings.preset]?.codeTheme ?? DEFAULT_SETTINGS.codeTheme;
     }
@@ -1482,9 +1508,6 @@ class PDFExportModal extends Modal {
       this.editorEl.value = content;
       this.noteTitleEl.textContent = file.basename;
       this.noteTitleEl.title = file.path;
-      this.showLoading();
-      // Two rAFs: spinner renders before the synchronous pagination work blocks the thread.
-      await new Promise<void>((r) => window.requestAnimationFrame(() => window.requestAnimationFrame(() => r())));
       this.render(true);
     }
   }
@@ -1685,8 +1708,7 @@ class PDFExportModal extends Modal {
       });
 
     if (immediate) {
-      // Two rAFs: the first fires before paint, the second after — the spinner
-      // must be visible before the synchronous pagination work blocks the thread.
+      // Double rAF: ensures the spinner paints before synchronous pagination blocks the thread.
       window.requestAnimationFrame(() => window.requestAnimationFrame(() => void safeDo()));
     } else {
       this.renderDebounceTimer = window.setTimeout(() => {
@@ -1761,8 +1783,8 @@ class PDFExportModal extends Modal {
     const mBottom = mmToPx(s.marginBottom);
     const mLeft   = mmToPx(s.marginLeft);
     const mRight  = mmToPx(s.marginRight);
-    const footerH = s.showFooter ? 28 : 0;
-    const headerH = s.showHeader && s.headerText ? 20 : 0;
+    const footerH = s.showFooter && (s.showPageNumbers || !!s.footerText) ? 28 : 0;
+    const headerH = s.showHeader && !!s.headerText ? 20 : 0;
     // Clamp to at least 1 px so the paginator sandbox never has zero dimensions.
     const contentW = Math.max(1, pw - mLeft - mRight);
     const contentH = Math.max(1, ph - mTop - mBottom - footerH - headerH);
@@ -1786,8 +1808,7 @@ class PDFExportModal extends Modal {
     }
 
     const layouts = buildPageLayouts(allPages, s);
-    const resolvedFont = s.fontFamily === "__custom__" ? (s.customFontName.trim() || "inherit") : s.fontFamily;
-    this.layoutCache = { layouts, pw, ph, mTop, mLeft, mRight, footerH, headerH, contentW, contentH, docCSS: fullCSS, fontFamily: resolvedFont, accentColor: s.accentColor, pageBackground: s.pageBackground, isRTL };
+    this.layoutCache = { layouts, pw, ph, mTop, mLeft, mRight, footerH, headerH, contentW, contentH, docCSS: fullCSS, fontFamily: resolveFont(s), accentColor: s.accentColor, pageBackground: s.pageBackground, isRTL };
 
     this.drawPreview(this.layoutCache, s.previewScale);
     this.pageCountEl.textContent = `${layouts.length} page${layouts.length !== 1 ? "s" : ""}`;
@@ -1861,8 +1882,7 @@ class PDFExportModal extends Modal {
       const scaleWrap = wrap.createEl("div", { cls: "mpdf-page-scale" });
       scaleWrap.setCssStyles({ width: `${scaledW}px`, height: `${scaledH}px` });
 
-      // Each page renders inside a shadow root so Obsidian's theme CSS cannot
-      // reach the page content across the shadow boundary.
+      // Shadow root isolates page content from Obsidian's theme CSS.
       const shadowHost = activeDocument.createElement("div");
       shadowHost.addClass("mpdf-shadow-host");
       shadowHost.setCssStyles({ width: `${pw}px`, height: `${ph}px`, transform: `scale(${scale})` });
@@ -1880,20 +1900,7 @@ class PDFExportModal extends Modal {
           display: "flex", alignItems: "center",
           fontSize: "9px", color: "#999", fontFamily: fontFamily, whiteSpace: "nowrap",
         });
-        if (layout.headerCenter) {
-          const span = activeDocument.createElement("span");
-          span.className = "mpdf-hf-center";
-          span.textContent = layout.headerCenter;
-          hdr.appendChild(span);
-        } else {
-          const leftSpan = activeDocument.createElement("span");
-          leftSpan.textContent = layout.headerLeft;
-          hdr.appendChild(leftSpan);
-          const rightSpan = activeDocument.createElement("span");
-          rightSpan.className = "mpdf-hf-right";
-          rightSpan.textContent = layout.headerRight;
-          hdr.appendChild(rightSpan);
-        }
+        appendHFNodes(hdr, layout.headerCenter, layout.headerLeft, layout.headerRight);
         shadow.appendChild(hdr);
       }
 
@@ -1937,20 +1944,7 @@ class PDFExportModal extends Modal {
           padding: `0 ${mRight}px 0 ${mLeft}px`, fontSize: "9px", color: "#aaa", fontFamily: fontFamily,
         });
 
-        if (layout.footerCenter) {
-          const span = activeDocument.createElement("span");
-          span.className = "mpdf-hf-center";
-          span.textContent = layout.footerCenter;
-          footer.appendChild(span);
-        } else {
-          const left = activeDocument.createElement("span");
-          left.textContent = layout.footerLeft;
-          footer.appendChild(left);
-          const right = activeDocument.createElement("span");
-          right.className = "mpdf-hf-right";
-          right.textContent = layout.footerRight;
-          footer.appendChild(right);
-        }
+        appendHFNodes(footer, layout.footerCenter, layout.footerLeft, layout.footerRight);
         shadow.appendChild(footer);
       }
     }
@@ -2010,21 +2004,14 @@ class PDFExportModal extends Modal {
       }).join("\n");
 
       const hasExportHeader = s.showHeader && (layout.headerLeft || layout.headerCenter || layout.headerRight);
-      const headerInnerHTML = layout.headerCenter
-        ? `<span style="flex:1;text-align:center;">${escapeHTML(layout.headerCenter)}</span>`
-        : `<span>${escapeHTML(layout.headerLeft)}</span><span style="margin-left:auto;">${escapeHTML(layout.headerRight)}</span>`;
       const headerHTML = hasExportHeader
-        ? `<div style="position:absolute;top:${mTop * 0.4}px;left:${mLeft}px;right:${mRight}px;display:flex;align-items:center;font-size:9px;color:#999;font-family:${fontFamily};white-space:nowrap;">${headerInnerHTML}</div>`
+        ? `<div style="position:absolute;top:${mTop * 0.4}px;left:${mLeft}px;right:${mRight}px;display:flex;align-items:center;font-size:9px;color:#999;font-family:${fontFamily};white-space:nowrap;">${buildHFInnerHTML(layout.headerCenter, layout.headerLeft, layout.headerRight)}</div>`
         : "";
-
-      const footerInnerHTML = layout.footerCenter
-        ? `<span style="flex:1;text-align:center;">${escapeHTML(layout.footerCenter)}</span>`
-        : `<span>${escapeHTML(layout.footerLeft)}</span><span style="margin-left:auto;">${escapeHTML(layout.footerRight)}</span>`;
 
       const hasExportFooter = s.showFooter && (layout.footerLeft || layout.footerRight || layout.footerCenter);
       const footerBorder = s.showFooterBorder ? `border-top:0.5px solid ${exportAccent}33;` : "";
       const footerHTML = hasExportFooter
-        ? `<div style="position:absolute;bottom:0;left:0;right:0;height:${footerH}px;display:flex;align-items:center;${footerBorder}padding:0 ${mRight}px 0 ${mLeft}px;font-size:9px;color:#aaa;font-family:${fontFamily};">${footerInnerHTML}</div>`
+        ? `<div style="position:absolute;bottom:0;left:0;right:0;height:${footerH}px;display:flex;align-items:center;${footerBorder}padding:0 ${mRight}px 0 ${mLeft}px;font-size:9px;color:#aaa;font-family:${fontFamily};">${buildHFInnerHTML(layout.footerCenter, layout.footerLeft, layout.footerRight)}</div>`
         : "";
 
       const contentDivHTML = `<div class="mpdf-doc"${isRTL ? ' dir="rtl"' : ''} style="position:absolute;top:${mTop + headerH}px;left:${mLeft}px;width:${contentW}px;">${contentHTML}</div>`;
@@ -2099,11 +2086,8 @@ ${pageHTMLParts.join("\n")}
         if (exportHandled) return;
         exportHandled = true;
 
-        // For named sizes: pass the size string + landscape flag — same as before.
-        // For Custom: the export HTML already has `@page { size: ${pw}px ${ph}px }`
-        // and the page divs are sized to match. preferCSSPageSize tells Electron to
-        // use that @page rule as the authoritative page size rather than pageSize.
-        // The placeholder "A4" is never used when preferCSSPageSize is true.
+        // Custom sizes embed @page dimensions in the HTML; preferCSSPageSize lets
+        // Electron honour that rule. Named sizes pass the size string directly.
         const isCustom = s.pageSize === "Custom";
         win.webContents
           .printToPDF({
@@ -2137,11 +2121,7 @@ ${pageHTMLParts.join("\n")}
 class PDFExportSettingTab extends PluginSettingTab {
   plugin: MarkdownPDFPlugin;
 
-  /**
-   * Set to `true` whenever the user changes any setting while this tab is open.
-   * The live preview modal is re-rendered exactly once when the tab closes,
-   * rather than on every individual keystroke or toggle.
-   */
+  /** True when any setting changed while this tab is open; triggers a single render on hide(). */
   private dirty = false;
 
   constructor(app: App, plugin: MarkdownPDFPlugin) {
@@ -2155,11 +2135,7 @@ class PDFExportSettingTab extends PluginSettingTab {
     this.buildSettings();
   }
 
-  /**
-   * Obsidian calls this when the user navigates away from the tab or closes
-   * the settings modal.  If any setting was changed we fire a single render
-   * now, which is far cheaper than rendering on every keystroke.
-   */
+  /** Called by Obsidian when the user leaves this tab. Fires one render if settings changed. */
   hide(): void {
     if (this.dirty) {
       this.dirty = false;
@@ -2172,11 +2148,8 @@ class PDFExportSettingTab extends PluginSettingTab {
     await this.plugin.saveSettings();
   }
 
-  /**
-   * Builds (or re-builds) the settings UI.  Extracted from `display()` so
-   * that preset / reset handlers can refresh the form without resetting the
-   * dirty flag back to `false`.
-   */
+  /** Builds (or rebuilds) the settings UI. Separated from display() so preset/reset
+   *  handlers can refresh the form without resetting the dirty flag. */
   private buildSettings(): void {
     const { containerEl } = this;
     containerEl.empty();
