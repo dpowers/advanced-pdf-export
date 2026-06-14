@@ -1618,10 +1618,10 @@ class PDFExportModal extends Modal {
     const hInp = makeNumInput("H", s.customPageHeight);
     customCtrl.createEl("span", { cls: "mpdf-ctrl-label", text: "mm" });
 
-    sizeSelect.addEventListener("change", async () => {
+    sizeSelect.addEventListener("change", () => {
       this.plugin.settings.pageSize = sizeSelect.value;
       customCtrl.toggleClass("mpdf-is-hidden", sizeSelect.value !== "Custom");
-      await this.plugin.saveSettingsAndRender();
+      void this.plugin.saveSettingsAndRender();
     });
 
     const applyCustomDims = async () => {
