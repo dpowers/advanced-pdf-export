@@ -47,8 +47,10 @@ Type `///` on its own line, or click **Insert Page Break** in the toolbar.
 
 ![Modern preset](screenshots/style3.png)
 
-### Settings Panel
-![Settings](screenshots/settings1.png)
+### Colors Setting Panel
+![Colors Settings](screenshots/settings1.png)
+
+> See [Settings Reference](#settings-reference) for the complete list of settings.
 
 
 ## Installation
