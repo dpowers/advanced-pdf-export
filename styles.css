@@ -25,7 +25,6 @@
   background: var(--background-secondary);
   border-bottom: 1px solid var(--background-modifier-border);
   flex-shrink: 0;
-  gap: 0;
   overflow: hidden;
 }
 
@@ -100,7 +99,7 @@
   padding: 4px 10px;
   cursor: pointer;
   flex-shrink: 0;
-  transition: all 0.12s;
+  transition: border-color 0.12s, color 0.12s, background-color 0.12s;
 }
 
 .mpdf-btn:hover {
@@ -213,7 +212,7 @@
   pointer-events: none; /* let clicks through to cancel/settings while loading */
 }
 
-.mpdf-loading-overlay.is-active {
+.mpdf-loading-overlay.mpdf-is-active {
   display: flex;
 }
 
@@ -223,12 +222,17 @@
   border: 3px solid rgba(255, 255, 255, 0.12);
   border-top-color: var(--interactive-accent);
   border-radius: 50%;
-  animation: mpdf-spin 0.65s linear infinite;
   flex-shrink: 0;
 }
 
-@keyframes mpdf-spin {
-  to { transform: rotate(360deg); }
+@media (prefers-reduced-motion: no-preference) {
+  .mpdf-spinner {
+    animation: mpdf-spin 0.65s linear infinite;
+  }
+
+  @keyframes mpdf-spin {
+    to { transform: rotate(360deg); }
+  }
 }
 
 .mpdf-loading-text {
@@ -266,8 +270,33 @@
   accent-color: var(--interactive-accent);
 }
 
+/* Number inputs for the custom page-size control in the topbar */
+.mpdf-custom-size-input {
+  width: 52px;
+  background: var(--background-primary);
+  color: var(--text-normal);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 4px;
+  font-size: 12px;
+  padding: 3px 5px;
+  outline: none;
+  /* Suppress native spinners so the compact topbar stays tidy */
+  -moz-appearance: textfield;
+}
+
+.mpdf-custom-size-input::-webkit-outer-spin-button,
+.mpdf-custom-size-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.mpdf-custom-size-input:hover,
+.mpdf-custom-size-input:focus {
+  border-color: var(--interactive-accent);
+}
+
 /* Utility: toggle visibility without affecting layout flow */
-.is-hidden {
+.mpdf-is-hidden {
   display: none !important;
 }
 

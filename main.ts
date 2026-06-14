@@ -54,6 +54,7 @@ interface ElectronBrowserWindow {
       pageSize: string;
       landscape: boolean;
       printBackground: boolean;
+      preferCSSPageSize?: boolean;
       margins: { marginType: string };
     }): Promise<Buffer>;
   };
@@ -98,6 +99,7 @@ interface PDFExportSettings extends DocStyle {
   footerText: string;
   showHeader: boolean;
   showFooter: boolean;
+  showHeaderBorder: boolean;
   showFooterBorder: boolean;
   showPageNumbers: boolean;
   pageNumberPosition: "center" | "left" | "right";
@@ -110,6 +112,10 @@ interface PDFExportSettings extends DocStyle {
   autoBreakH2: boolean;
   includeFilenameAsTitle: boolean;
   previewScale: number;
+  /** Width in mm, used only when pageSize === "Custom". */
+  customPageWidth: number;
+  /** Height in mm, used only when pageSize === "Custom". */
+  customPageHeight: number;
 }
 
 // Cached layout — holds everything drawPreview and exportPDF need so that
@@ -319,6 +325,7 @@ const DEFAULT_SETTINGS: PDFExportSettings = {
   footerText: "",
   showHeader: true,
   showFooter: true,
+  showHeaderBorder: false,
   showFooterBorder: false,
   showPageNumbers: true,
   pageNumberPosition: "right",
@@ -331,12 +338,29 @@ const DEFAULT_SETTINGS: PDFExportSettings = {
   autoBreakH2: false,
   includeFilenameAsTitle: false,
   previewScale: 0.90,
+  customPageWidth: 210,   // A4 width in mm
+  customPageHeight: 297,  // A4 height in mm
 };
 
 // ─── Utilities ────────────────────────────────────────────────────────────────
 
 /** mm → px at 96 dpi, matching Electron's print pipeline. */
 const mmToPx = (mm: number) => (mm / 25.4) * 96;
+
+/**
+ * Returns the page dimensions in px for the current settings.
+ * For "Custom", converts the user-entered mm values; for named sizes, looks up
+ * PAGE_SIZES directly.  Orientation swapping is handled by callers (doRender).
+ */
+function resolvePageDims(s: PDFExportSettings): { w: number; h: number } {
+  if (s.pageSize === "Custom") {
+    return {
+      w: Math.max(1, Math.round(mmToPx(s.customPageWidth))),
+      h: Math.max(1, Math.round(mmToPx(s.customPageHeight))),
+    };
+  }
+  return PAGE_SIZES[s.pageSize] ?? PAGE_SIZES["A4"];
+}
 
 function escapeHTML(s: string): string {
   return s
@@ -369,9 +393,9 @@ function normalizeMarkdown(raw: string): string {
   return raw.replace(/\r\n/g, "\n");
 }
 
-/** Strips an opening YAML frontmatter block (--- … ---); returns the string unchanged if none is found. */
+/** Strips an opening YAML frontmatter block (--- … ---). Input must be LF-normalised. */
 function stripFrontmatter(md: string): string {
-  return md.replace(/^---[ \t]*\r?\n[\s\S]*?\r?\n---[ \t]*(\r?\n|$)/, "");
+  return md.replace(/^---[ \t]*\n[\s\S]*?\n---[ \t]*(\n|$)/, "");
 }
 
 /** Splits on `///` manual page-break markers, trimming and dropping empty sections. */
@@ -389,9 +413,8 @@ async function renderMarkdownToEl(
   component: Component,
 ): Promise<HTMLElement> {
   const temp = activeDocument.createElement("div");
-  // Attach offscreen to the live document so Obsidian's async code-block
-  // post-processors (including mermaid) can render into a real DOM context.
-  // The element is detached again before being returned.
+  // Attach offscreen so Obsidian's async post-processors (mermaid, math) run in a real DOM context.
+  // Detached again before returning.
   temp.setCssStyles({ position: "fixed", top: "0", left: "-99999px", visibility: "hidden", pointerEvents: "none" });
   activeDocument.body.appendChild(temp);
   try {
@@ -433,8 +456,9 @@ function postProcessRenderedHTML(root: HTMLElement): void {
   // The external-link class triggers a ↗ icon via theme CSS — meaningless in print.
   root.querySelectorAll<HTMLAnchorElement>("a").forEach((a) => {
     a.classList.remove("external-link");
-    
-    //Wikilinks
+
+    // Rewrite anchor hrefs to match the slugified IDs assigned above,
+    // covering both wikilink data-href and standard markdown anchors.
     const target = a.getAttribute("data-href") ?? a.getAttribute("href");
     if (target?.startsWith("#")) {
       a.setAttribute("href", "#" + slugifyHeading(target.slice(1)));
@@ -458,10 +482,8 @@ function postProcessRenderedHTML(root: HTMLElement): void {
   });
 }
 
-/** Waits for Obsidian's mermaid post-processor to finish converting all mermaid
- *  code blocks into rendered SVGs.  Each `.mermaid` container is watched via a
- *  MutationObserver; resolves immediately if already rendered, otherwise waits
- *  up to 5 s per diagram before timing out. */
+/** Waits for mermaid code blocks to be converted to SVGs by Obsidian's post-processor.
+ *  Resolves immediately if already rendered; times out per diagram after 5 s. */
 async function waitForMermaidDiagrams(el: HTMLElement): Promise<void> {
   const containers = Array.from(el.querySelectorAll<HTMLElement>(".mermaid"));
   if (containers.length === 0) return;
@@ -641,7 +663,7 @@ function buildCodeBlockCSS(s: PDFExportSettings): string {
     font-size: ${s.codeFontSize}em;
     color: ${text};
     white-space: pre-wrap;
-    word-break: break-all;
+    overflow-wrap: break-word;
     background: none;
     padding: 0;
   }
@@ -665,11 +687,14 @@ function hexLuminance(hex: string): number {
   return 0.2126 * r + 0.7152 * g + 0.0722 * b;
 }
 
+/** Returns the resolved CSS font-family string for the current settings. */
+function resolveFont(s: PDFExportSettings): string {
+  return s.fontFamily === "__custom__" ? (s.customFontName.trim() || "inherit") : s.fontFamily;
+}
+
 function buildDocCSS(s: PDFExportSettings, isRTL = false): string {
   const hs = s.headingScale;
-  const fontFamily = s.fontFamily === "__custom__"
-    ? (s.customFontName.trim() || "inherit")
-    : s.fontFamily;
+  const fontFamily = resolveFont(s);
   const tableHeaderTextColor =
     hexLuminance(s.tableHeaderBg) < 0.35 ? "#fff" : s.headingColor;
 
@@ -866,9 +891,9 @@ function getMathJaxCSS(): string {
 }
 
 // ─── Paginator ────────────────────────────────────────────────────────────────
-// Measures block children of the rendered HTML in a hidden, scoped sandbox and
-// distributes them into page buckets.  Oversized elements are split by their
-// natural unit: line for PRE, row for TABLE, item for UL/OL, word for text nodes.
+// Distributes rendered block children into page-height buckets. Oversized
+// elements are split by natural unit: line (PRE), row (TABLE), item (UL/OL),
+// word or character (inline text).
 
 const INLINE_SPLIT_TAGS = new Set(["P", "LI", "BLOCKQUOTE", "TD", "TH"]);
 
@@ -1194,8 +1219,7 @@ function paginateEl(
   contentHeightPx: number,
   docCSS: string,
 ): HTMLElement[][] {
-  // Off-screen shadow-root sandbox: CSS is fully scoped so it never pollutes
-  // the host document, and adoptedStyleSheets keeps the shadow tree clean.
+  // Hidden shadow-root sandbox: scoped CSS prevents host-document pollution.
   const sandboxHost = activeDocument.createElement("div");
   sandboxHost.setCssStyles({
     position: "fixed", top: "0", left: "-99999px",
@@ -1332,6 +1356,33 @@ function buildPageLayouts(allPages: HTMLElement[][], s: PDFExportSettings): Page
   });
 }
 
+// ─── Header / footer rendering helpers ───────────────────────────────────────
+
+/** Appends center-or-left/right span nodes into a header/footer container element. */
+function appendHFNodes(container: HTMLElement, center: string, left: string, right: string): void {
+  if (center) {
+    const span = activeDocument.createElement("span");
+    span.className = "mpdf-hf-center";
+    span.textContent = center;
+    container.appendChild(span);
+  } else {
+    const leftSpan = activeDocument.createElement("span");
+    leftSpan.textContent = left;
+    container.appendChild(leftSpan);
+    const rightSpan = activeDocument.createElement("span");
+    rightSpan.className = "mpdf-hf-right";
+    rightSpan.textContent = right;
+    container.appendChild(rightSpan);
+  }
+}
+
+/** Returns the inner HTML string for a header/footer bar (used in export HTML). */
+function buildHFInnerHTML(center: string, left: string, right: string): string {
+  return center
+    ? `<span style="flex:1;text-align:center;">${escapeHTML(center)}</span>`
+    : `<span>${escapeHTML(left)}</span><span style="margin-left:auto;">${escapeHTML(right)}</span>`;
+}
+
 // ─── Plugin ───────────────────────────────────────────────────────────────────
 
 export default class MarkdownPDFPlugin extends Plugin {
@@ -1370,8 +1421,7 @@ export default class MarkdownPDFPlugin extends Plugin {
   async loadSettings() {
     const data = (await this.loadData() ?? {}) as Partial<PDFExportSettings> & { presetSnapshots?: Record<string, DocStyle> };
     this.settings = Object.assign({}, DEFAULT_SETTINGS, data);
-    // Settings saved before per-preset code themes existed default to the
-    // "default" preset's theme above; align them with the active preset instead.
+    // Migration: codeTheme was added per-preset; absent value adopts the active preset's default.
     if (data.codeTheme === undefined) {
       this.settings.codeTheme = PRESETS[this.settings.preset]?.codeTheme ?? DEFAULT_SETTINGS.codeTheme;
     }
@@ -1460,9 +1510,6 @@ class PDFExportModal extends Modal {
       this.editorEl.value = content;
       this.noteTitleEl.textContent = file.basename;
       this.noteTitleEl.title = file.path;
-      this.showLoading();
-      // Two rAFs: spinner renders before the synchronous pagination work blocks the thread.
-      await new Promise<void>((r) => window.requestAnimationFrame(() => window.requestAnimationFrame(() => r())));
       this.render(true);
     }
   }
@@ -1544,10 +1591,44 @@ class PDFExportModal extends Modal {
 
     const sizeOpts: Record<string, string> = {};
     Object.keys(PAGE_SIZES).forEach((k) => (sizeOpts[k] = k));
-    makeSelect("Size", sizeOpts, s.pageSize, async (v) => {
-      this.plugin.settings.pageSize = v;
+    sizeOpts["Custom"] = "Custom";
+
+    // Build the size control manually so we can show/hide the custom-dims inputs.
+    const sizeCtrl = left.createEl("div", { cls: "mpdf-ctrl" });
+    sizeCtrl.createEl("span", { cls: "mpdf-ctrl-label", text: "Size" });
+    const sizeSelect = sizeCtrl.createEl("select", { cls: "mpdf-select" });
+    for (const [v, t] of Object.entries(sizeOpts)) {
+      const o = sizeSelect.createEl("option", { text: t, value: v });
+      if (v === s.pageSize) o.selected = true;
+    }
+
+    // Custom W×H inputs — visible only when "Custom" is active.
+    const customCtrl = left.createEl("div", { cls: "mpdf-ctrl" });
+    customCtrl.toggleClass("mpdf-is-hidden", s.pageSize !== "Custom");
+
+    const makeNumInput = (label: string, val: number): HTMLInputElement => {
+      customCtrl.createEl("span", { cls: "mpdf-ctrl-label", text: label });
+      const inp = customCtrl.createEl("input", { cls: "mpdf-custom-size-input" });
+      inp.type = "number"; inp.min = "10"; inp.step = "1"; inp.value = String(val);
+      return inp;
+    };
+    const wInp = makeNumInput("W", s.customPageWidth);
+    const hInp = makeNumInput("H", s.customPageHeight);
+    customCtrl.createEl("span", { cls: "mpdf-ctrl-label", text: "mm" });
+
+    sizeSelect.addEventListener("change", async () => {
+      this.plugin.settings.pageSize = sizeSelect.value;
+      customCtrl.toggleClass("mpdf-is-hidden", sizeSelect.value !== "Custom");
       await this.plugin.saveSettingsAndRender();
     });
+
+    const applyCustomDims = async () => {
+      this.plugin.settings.customPageWidth  = Math.max(10, parseFloat(wInp.value)  || 210);
+      this.plugin.settings.customPageHeight = Math.max(10, parseFloat(hInp.value) || 297);
+      await this.plugin.saveSettingsAndRender();
+    };
+    wInp.addEventListener("change", () => void applyCustomDims());
+    hInp.addEventListener("change", () => void applyCustomDims());
 
     makeSelect("Orient", { portrait: "Portrait", landscape: "Landscape" }, s.orientation,
       async (v) => {
@@ -1629,8 +1710,7 @@ class PDFExportModal extends Modal {
       });
 
     if (immediate) {
-      // Two rAFs: the first fires before paint, the second after — the spinner
-      // must be visible before the synchronous pagination work blocks the thread.
+      // Double rAF: ensures the spinner paints before synchronous pagination blocks the thread.
       window.requestAnimationFrame(() => window.requestAnimationFrame(() => void safeDo()));
     } else {
       this.renderDebounceTimer = window.setTimeout(() => {
@@ -1697,7 +1777,7 @@ class PDFExportModal extends Modal {
     md = PDFExportModal.insertAutoBreaks(md, s.autoBreakH1, s.autoBreakH2);
 
     const sections = splitMarkdownSections(md);
-    const dims = PAGE_SIZES[s.pageSize] ?? PAGE_SIZES["A4"];
+    const dims = resolvePageDims(s);
     const pw = s.orientation === "landscape" ? dims.h : dims.w;
     const ph = s.orientation === "landscape" ? dims.w : dims.h;
 
@@ -1705,8 +1785,8 @@ class PDFExportModal extends Modal {
     const mBottom = mmToPx(s.marginBottom);
     const mLeft   = mmToPx(s.marginLeft);
     const mRight  = mmToPx(s.marginRight);
-    const footerH = s.showFooter ? 28 : 0;
-    const headerH = s.showHeader && s.headerText ? 20 : 0;
+    const footerH = s.showFooter && (s.showPageNumbers || !!s.footerText) ? 28 : 0;
+    const headerH = s.showHeader && !!s.headerText ? 20 : 0;
     // Clamp to at least 1 px so the paginator sandbox never has zero dimensions.
     const contentW = Math.max(1, pw - mLeft - mRight);
     const contentH = Math.max(1, ph - mTop - mBottom - footerH - headerH);
@@ -1730,8 +1810,7 @@ class PDFExportModal extends Modal {
     }
 
     const layouts = buildPageLayouts(allPages, s);
-    const resolvedFont = s.fontFamily === "__custom__" ? (s.customFontName.trim() || "inherit") : s.fontFamily;
-    this.layoutCache = { layouts, pw, ph, mTop, mLeft, mRight, footerH, headerH, contentW, contentH, docCSS: fullCSS, fontFamily: resolvedFont, accentColor: s.accentColor, pageBackground: s.pageBackground, isRTL };
+    this.layoutCache = { layouts, pw, ph, mTop, mLeft, mRight, footerH, headerH, contentW, contentH, docCSS: fullCSS, fontFamily: resolveFont(s), accentColor: s.accentColor, pageBackground: s.pageBackground, isRTL };
 
     this.drawPreview(this.layoutCache, s.previewScale);
     this.pageCountEl.textContent = `${layouts.length} page${layouts.length !== 1 ? "s" : ""}`;
@@ -1744,13 +1823,13 @@ class PDFExportModal extends Modal {
   }
 
   private showLoading() {
-    this.loadingOverlayEl.addClass("is-active");
+    this.loadingOverlayEl.addClass("mpdf-is-active");
     this.renderBtn.disabled = true;
     this.renderBtn.textContent = "Rendering…";
   }
 
   private hideLoading() {
-    this.loadingOverlayEl.removeClass("is-active");
+    this.loadingOverlayEl.removeClass("mpdf-is-active");
     this.renderBtn.disabled = false;
     this.renderBtn.textContent = "⟳ Render PDF";
   }
@@ -1805,8 +1884,7 @@ class PDFExportModal extends Modal {
       const scaleWrap = wrap.createEl("div", { cls: "mpdf-page-scale" });
       scaleWrap.setCssStyles({ width: `${scaledW}px`, height: `${scaledH}px` });
 
-      // Each page renders inside a shadow root so Obsidian's theme CSS cannot
-      // reach the page content across the shadow boundary.
+      // Shadow root isolates page content from Obsidian's theme CSS.
       const shadowHost = activeDocument.createElement("div");
       shadowHost.addClass("mpdf-shadow-host");
       shadowHost.setCssStyles({ width: `${pw}px`, height: `${ph}px`, transform: `scale(${scale})` });
@@ -1823,21 +1901,9 @@ class PDFExportModal extends Modal {
           position: "absolute", top: `${mTop * 0.4}px`, left: `${mLeft}px`, right: `${mRight}px`,
           display: "flex", alignItems: "center",
           fontSize: "9px", color: "#999", fontFamily: fontFamily, whiteSpace: "nowrap",
+          ...(s.showHeaderBorder ? { borderBottom: `0.5px solid ${accentColor}33` } : {}),
         });
-        if (layout.headerCenter) {
-          const span = activeDocument.createElement("span");
-          span.className = "mpdf-hf-center";
-          span.textContent = layout.headerCenter;
-          hdr.appendChild(span);
-        } else {
-          const leftSpan = activeDocument.createElement("span");
-          leftSpan.textContent = layout.headerLeft;
-          hdr.appendChild(leftSpan);
-          const rightSpan = activeDocument.createElement("span");
-          rightSpan.className = "mpdf-hf-right";
-          rightSpan.textContent = layout.headerRight;
-          hdr.appendChild(rightSpan);
-        }
+        appendHFNodes(hdr, layout.headerCenter, layout.headerLeft, layout.headerRight);
         shadow.appendChild(hdr);
       }
 
@@ -1881,20 +1947,7 @@ class PDFExportModal extends Modal {
           padding: `0 ${mRight}px 0 ${mLeft}px`, fontSize: "9px", color: "#aaa", fontFamily: fontFamily,
         });
 
-        if (layout.footerCenter) {
-          const span = activeDocument.createElement("span");
-          span.className = "mpdf-hf-center";
-          span.textContent = layout.footerCenter;
-          footer.appendChild(span);
-        } else {
-          const left = activeDocument.createElement("span");
-          left.textContent = layout.footerLeft;
-          footer.appendChild(left);
-          const right = activeDocument.createElement("span");
-          right.className = "mpdf-hf-right";
-          right.textContent = layout.footerRight;
-          footer.appendChild(right);
-        }
+        appendHFNodes(footer, layout.footerCenter, layout.footerLeft, layout.footerRight);
         shadow.appendChild(footer);
       }
     }
@@ -1954,21 +2007,15 @@ class PDFExportModal extends Modal {
       }).join("\n");
 
       const hasExportHeader = s.showHeader && (layout.headerLeft || layout.headerCenter || layout.headerRight);
-      const headerInnerHTML = layout.headerCenter
-        ? `<span style="flex:1;text-align:center;">${escapeHTML(layout.headerCenter)}</span>`
-        : `<span>${escapeHTML(layout.headerLeft)}</span><span style="margin-left:auto;">${escapeHTML(layout.headerRight)}</span>`;
+      const headerBorder = s.showHeaderBorder ? `border-bottom:0.5px solid ${exportAccent}33;` : "";
       const headerHTML = hasExportHeader
-        ? `<div style="position:absolute;top:${mTop * 0.4}px;left:${mLeft}px;right:${mRight}px;display:flex;align-items:center;font-size:9px;color:#999;font-family:${fontFamily};white-space:nowrap;">${headerInnerHTML}</div>`
+        ? `<div style="position:absolute;top:${mTop * 0.4}px;left:${mLeft}px;right:${mRight}px;display:flex;align-items:center;font-size:9px;color:#999;font-family:${fontFamily};white-space:nowrap;${headerBorder}">${buildHFInnerHTML(layout.headerCenter, layout.headerLeft, layout.headerRight)}</div>`
         : "";
-
-      const footerInnerHTML = layout.footerCenter
-        ? `<span style="flex:1;text-align:center;">${escapeHTML(layout.footerCenter)}</span>`
-        : `<span>${escapeHTML(layout.footerLeft)}</span><span style="margin-left:auto;">${escapeHTML(layout.footerRight)}</span>`;
 
       const hasExportFooter = s.showFooter && (layout.footerLeft || layout.footerRight || layout.footerCenter);
       const footerBorder = s.showFooterBorder ? `border-top:0.5px solid ${exportAccent}33;` : "";
       const footerHTML = hasExportFooter
-        ? `<div style="position:absolute;bottom:0;left:0;right:0;height:${footerH}px;display:flex;align-items:center;${footerBorder}padding:0 ${mRight}px 0 ${mLeft}px;font-size:9px;color:#aaa;font-family:${fontFamily};">${footerInnerHTML}</div>`
+        ? `<div style="position:absolute;bottom:0;left:0;right:0;height:${footerH}px;display:flex;align-items:center;${footerBorder}padding:0 ${mRight}px 0 ${mLeft}px;font-size:9px;color:#aaa;font-family:${fontFamily};">${buildHFInnerHTML(layout.footerCenter, layout.footerLeft, layout.footerRight)}</div>`
         : "";
 
       const contentDivHTML = `<div class="mpdf-doc"${isRTL ? ' dir="rtl"' : ''} style="position:absolute;top:${mTop + headerH}px;left:${mLeft}px;width:${contentW}px;">${contentHTML}</div>`;
@@ -2042,8 +2089,18 @@ ${pageHTMLParts.join("\n")}
       win.webContents.once("did-finish-load", () => {
         if (exportHandled) return;
         exportHandled = true;
+
+        // Custom sizes embed @page dimensions in the HTML; preferCSSPageSize lets
+        // Electron honour that rule. Named sizes pass the size string directly.
+        const isCustom = s.pageSize === "Custom";
         win.webContents
-          .printToPDF({ pageSize: s.pageSize, landscape: s.orientation === "landscape", printBackground: true, margins: { marginType: "none" } })
+          .printToPDF({
+            pageSize:          isCustom ? "A4" : s.pageSize,
+            landscape:         !isCustom && s.orientation === "landscape",
+            preferCSSPageSize: isCustom,
+            printBackground:   true,
+            margins:           { marginType: "none" },
+          })
           .then((data: Buffer) => {
             electron.require("fs").writeFile(res.filePath!, data, (err: Error | null) => {
               if (err) new Notice("Error saving PDF: " + err.message);
@@ -2068,11 +2125,7 @@ ${pageHTMLParts.join("\n")}
 class PDFExportSettingTab extends PluginSettingTab {
   plugin: MarkdownPDFPlugin;
 
-  /**
-   * Set to `true` whenever the user changes any setting while this tab is open.
-   * The live preview modal is re-rendered exactly once when the tab closes,
-   * rather than on every individual keystroke or toggle.
-   */
+  /** True when any setting changed while this tab is open; triggers a single render on hide(). */
   private dirty = false;
 
   constructor(app: App, plugin: MarkdownPDFPlugin) {
@@ -2086,11 +2139,7 @@ class PDFExportSettingTab extends PluginSettingTab {
     this.buildSettings();
   }
 
-  /**
-   * Obsidian calls this when the user navigates away from the tab or closes
-   * the settings modal.  If any setting was changed we fire a single render
-   * now, which is far cheaper than rendering on every keystroke.
-   */
+  /** Called by Obsidian when the user leaves this tab. Fires one render if settings changed. */
   hide(): void {
     if (this.dirty) {
       this.dirty = false;
@@ -2103,11 +2152,8 @@ class PDFExportSettingTab extends PluginSettingTab {
     await this.plugin.saveSettings();
   }
 
-  /**
-   * Builds (or re-builds) the settings UI.  Extracted from `display()` so
-   * that preset / reset handlers can refresh the form without resetting the
-   * dirty flag back to `false`.
-   */
+  /** Builds (or rebuilds) the settings UI. Separated from display() so preset/reset
+   *  handlers can refresh the form without resetting the dirty flag. */
   private buildSettings(): void {
     const { containerEl } = this;
     containerEl.empty();
@@ -2136,13 +2182,31 @@ class PDFExportSettingTab extends PluginSettingTab {
 
     // ── Page ──────────────────────────────────────────────────────────────────
     new Setting(containerEl).setName("Page").setHeading();
+
+    let customPageSizeSetting: Setting;
+
     new Setting(containerEl).setName("Page size").addDropdown((d) => {
       Object.keys(PAGE_SIZES).forEach((k) => { d.addOption(k, k); });
+      d.addOption("Custom", "Custom…");
       d.setValue(s.pageSize).onChange((v) => {
         s.pageSize = v;
+        customPageSizeSetting.settingEl.toggleClass("mpdf-is-hidden", v !== "Custom");
         void this.markDirty();
       });
     });
+
+    customPageSizeSetting = new Setting(containerEl)
+      .setName("Custom page size (mm)")
+      .setDesc("Width × Height in millimetres.")
+      .addText((t) =>
+        t.setPlaceholder("Width").setValue(String(s.customPageWidth))
+         .onChange((v) => { s.customPageWidth  = Math.max(1, parseFloat(v) || 210); void this.markDirty(); }),
+      )
+      .addText((t) =>
+        t.setPlaceholder("Height").setValue(String(s.customPageHeight))
+         .onChange((v) => { s.customPageHeight = Math.max(1, parseFloat(v) || 297); void this.markDirty(); }),
+      );
+    customPageSizeSetting.settingEl.toggleClass("mpdf-is-hidden", s.pageSize !== "Custom");
     new Setting(containerEl).setName("Orientation").addDropdown((d) =>
       d.addOptions({ portrait: "Portrait", landscape: "Landscape" })
        .setValue(s.orientation)
@@ -2183,7 +2247,7 @@ class PDFExportSettingTab extends PluginSettingTab {
       }).setValue(s.fontFamily)
        .onChange((v) => {
          s.fontFamily = v;
-         customFontSetting.settingEl.toggleClass("is-hidden", v !== "__custom__");
+         customFontSetting.settingEl.toggleClass("mpdf-is-hidden", v !== "__custom__");
          void this.markDirty();
        }),
     );
@@ -2195,7 +2259,7 @@ class PDFExportSettingTab extends PluginSettingTab {
          .setValue(s.customFontName)
          .onChange((v) => { s.customFontName = v; void this.markDirty(); }),
       );
-    customFontSetting.settingEl.toggleClass("is-hidden", s.fontFamily !== "__custom__");
+    customFontSetting.settingEl.toggleClass("mpdf-is-hidden", s.fontFamily !== "__custom__");
     new Setting(containerEl).setName("Font size (px)").addDropdown((d) => {
       ["10","11","12","13","14","15","16"].forEach((v) => { d.addOption(v, v + "px"); });
       d.setValue(String(s.fontSize)).onChange((v) => {
@@ -2249,7 +2313,7 @@ class PDFExportSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Code syntax theme")
-      .setDesc("Colors fenced code blocks via Obsidian's syntax-highlighting token classes, independent of your Obsidian theme. \"None\" uses the body text color and code background above with no highlighting.")
+      .setDesc("Independent of your Obsidian theme. \"None\" uses the body text color and code background above with no highlighting.")
       .addDropdown((d) => {
         const opts: Record<string, string> = {};
         for (const [key, theme] of Object.entries(CODE_THEMES)) opts[key] = theme.name;
@@ -2289,6 +2353,9 @@ class PDFExportSettingTab extends PluginSettingTab {
       d.addOptions({ left: "Left", center: "Center", right: "Right" })
        .setValue(s.headerAlignment)
        .onChange((v) => { s.headerAlignment = v as "left"|"center"|"right"; void this.markDirty(); }),
+    );
+    new Setting(containerEl).setName("Header border").setDesc("Show the separator line below the header.").addToggle((t) =>
+      t.setValue(s.showHeaderBorder).onChange((v) => { s.showHeaderBorder = v; void this.markDirty(); }),
     );
     new Setting(containerEl).setName("Show footer").addToggle((t) =>
       t.setValue(s.showFooter).onChange((v) => { s.showFooter = v; void this.markDirty(); }),
@@ -2342,8 +2409,7 @@ class PDFExportSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName("Include file name as title")
       .setDesc(
-        "Prepend the note's file name as an H1 heading at the top of the PDF. " +
-        "Mirrors Obsidian's built-in 'Include file name as title' export option.",
+        "Prepend the note's file name as an H1 heading at the top of the PDF.",
       )
       .addToggle((t) =>
         t.setValue(s.includeFilenameAsTitle).onChange((v) => {
