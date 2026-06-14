@@ -110,10 +110,16 @@ All settings take effect after closing the settings panel.
 | Heading scale | 0.8× → 1.2× multiplier applied to all heading sizes |
 
 ### Colors
-Eight color pickers: Accent · Body text · Headings · Page background · Blockquote background · Blockquote border · Table header background · Code background
-
 | Setting | Description |
 |---|---|
+| Accent | Primary accent color used for links, borders, and highlights |
+| Body text | Main document text color |
+| Headings | Color applied to all heading levels |
+| Page background | Page background color |
+| Blockquote background | Fill color behind blockquote blocks |
+| Blockquote border | Left border color on blockquotes |
+| Table header background | Background color of table header rows |
+| Code background | Background color of inline and fenced code |
 | Code syntax theme | Colors fenced code blocks independently of your Obsidian theme. Options: None, GitHub Light, GitHub Dark, Atom One Light/Dark, Monokai, Dracula, Tokyo Night, Solarized Light, Catppuccin Macchiato/Mocha |
 
 ### Heading Style
