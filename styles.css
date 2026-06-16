@@ -265,8 +265,8 @@
 }
 
 /* width/accent kept in CSS to avoid inline styles in JS */
-.mpdf-zoom-slider {
-  width: 48px;
+.mpdf-topbar .mpdf-zoom-slider {
+  width: 64px;
   accent-color: var(--interactive-accent);
 }
 
