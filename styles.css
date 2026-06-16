@@ -19,44 +19,44 @@
 /* Topbar */
 .mpdf-topbar {
   display: flex;
-  align-items: center;
-  padding: 0 12px;
-  height: 44px;
+  align-items: flex-start;
+  padding: 6px 12px;
+  min-height: 44px;
   background: var(--background-secondary);
   border-bottom: 1px solid var(--background-modifier-border);
   flex-shrink: 0;
-  overflow: hidden;
 }
 
 .mpdf-topbar-left {
   display: flex;
   align-items: center;
   gap: 8px;
+  row-gap: 4px;
   flex: 1;
   min-width: 0;
+  flex-wrap: wrap;
 }
 
 .mpdf-topbar-title {
-  flex-shrink: 0;
-  max-width: 28%;
+  flex-shrink: 1;
+  min-width: 40px;
+  max-width: 220px;
   font-size: 12px;
   font-weight: 500;
   color: var(--text-normal);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  padding: 0 16px;
-  text-align: center;
+  padding: 0 6px;
   opacity: 0.85;
+  border-left: 1px solid var(--background-modifier-border);
 }
 
 .mpdf-topbar-right {
   display: flex;
   align-items: center;
   gap: 8px;
-  flex: 1;
-  min-width: 0;
-  justify-content: flex-end;
+  flex-shrink: 0;
 }
 
 .mpdf-ctrl {
@@ -266,7 +266,7 @@
 
 /* width/accent kept in CSS to avoid inline styles in JS */
 .mpdf-zoom-slider {
-  width: 64px;
+  width: 48px;
   accent-color: var(--interactive-accent);
 }
 

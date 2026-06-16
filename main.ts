@@ -1565,7 +1565,6 @@ class PDFExportModal extends Modal {
 
   private buildTopbar(topbar: HTMLElement, s: PDFExportSettings) {
     const left  = topbar.createEl("div", { cls: "mpdf-topbar-left" });
-    this.noteTitleEl = topbar.createEl("div", { cls: "mpdf-topbar-title", text: "—" });
     const right = topbar.createEl("div", { cls: "mpdf-topbar-right" });
 
     const makeSelect = (
@@ -1632,7 +1631,7 @@ class PDFExportModal extends Modal {
     wInp.addEventListener("change", () => void applyCustomDims());
     hInp.addEventListener("change", () => void applyCustomDims());
 
-    makeSelect("Orient", { portrait: "Portrait", landscape: "Landscape" }, s.orientation,
+    makeSelect("", { portrait: "Portrait", landscape: "Landscape" }, s.orientation,
       async (v) => {
         this.plugin.settings.orientation = v as "portrait" | "landscape";
         await this.plugin.saveSettingsAndRender();
@@ -1662,6 +1661,8 @@ class PDFExportModal extends Modal {
     const breakBtn = left.createEl("button", { cls: "mpdf-btn", text: "Insert Page Break" });
     breakBtn.title = "Insert page break (///)";
     breakBtn.addEventListener("click", () => this.insertAtCursor("\n///\n"));
+
+    this.noteTitleEl = left.createEl("div", { cls: "mpdf-topbar-title", text: "—" });
 
     this.pageCountEl = right.createEl("span", { cls: "mpdf-page-count", text: "— pages" });
 
