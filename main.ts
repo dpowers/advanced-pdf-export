@@ -2281,12 +2281,15 @@ class PDFExportSettingTab extends PluginSettingTab {
       | "headerFontSize" | "footerFontSize" | "frameThickness" | "frameMargin";
     const numberSetting = (name: string, key: NumericFieldKey, min?: number) =>
       new Setting(containerEl).setName(name).addText((t) =>
+      if (desc) setting.setDesc(desc);
+      return setting.addText((t) =>
         t.setValue(String(s[key])).onChange((v) => {
           const n = parseInt(v, 10) || 0;
           s[key] = min !== undefined ? Math.max(min, n) : n;
           void this.markDirty();
         }),
       );
+    };
     numberSetting("Top",    "marginTop");
     numberSetting("Bottom", "marginBottom");
     numberSetting("Left",   "marginLeft");
@@ -2484,15 +2487,10 @@ class PDFExportSettingTab extends PluginSettingTab {
       );
     frameColorSetting = colorSetting("Frame color", "frameColor");
     frameThicknessSetting = numberSetting("Frame thickness (px)", "frameThickness", 1);
-    frameMarginSetting = new Setting(containerEl)
-      .setName("Frame margin (px)")
-      .setDesc("Gap between the page edge and the frame, applied equally on all four sides.")
-      .addText((t) =>
-        t.setValue(String(s.frameMargin)).onChange((v) => {
-          s.frameMargin = Math.max(0, parseInt(v, 10) || 0);
-          void this.markDirty();
-        }),
-      );
+    frameMarginSetting = numberSetting(
+      "Frame margin (px)", "frameMargin", 0,
+      "Gap between the page edge and the frame, applied equally on all four sides.",
+    );
     frameStyleSetting = new Setting(containerEl).setName("Frame style").addDropdown((d) =>
       d.addOptions({ solid: "Solid", dashed: "Dashed", dotted: "Dotted", double: "Double", groove: "Groove", ridge: "Ridge" })
        .setValue(s.frameStyle)
