@@ -2279,8 +2279,8 @@ class PDFExportSettingTab extends PluginSettingTab {
     new Setting(containerEl).setName("Margins (mm)").setHeading();
     type NumericFieldKey = "marginTop" | "marginBottom" | "marginLeft" | "marginRight"
       | "headerFontSize" | "footerFontSize" | "frameThickness" | "frameMargin";
-    const numberSetting = (name: string, key: NumericFieldKey, min?: number) =>
-      new Setting(containerEl).setName(name).addText((t) =>
+    const numberSetting = (name: string, key: NumericFieldKey, min?: number, desc?: string) => {
+      const setting = new Setting(containerEl).setName(name);
       if (desc) setting.setDesc(desc);
       return setting.addText((t) =>
         t.setValue(String(s[key])).onChange((v) => {
