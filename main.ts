@@ -106,6 +106,16 @@ interface PDFExportSettings extends DocStyle {
   pageNumberStart: number;
   showHeaderFooterOnFirstPage: boolean;
   headerAlignment: "left" | "center" | "right";
+  headerFontSize: number;
+  headerFontColor: string;
+  footerFontSize: number;
+  footerFontColor: string;
+  linkUnderline: boolean;
+  frameEnabled: boolean;
+  frameColor: string;
+  frameThickness: number;
+  frameMargin: number;
+  frameStyle: "solid" | "dashed" | "dotted" | "double" | "groove" | "ridge";
   hideFrontmatter: boolean;
   customFontName: string;
   autoBreakH1: boolean;
@@ -332,6 +342,16 @@ const DEFAULT_SETTINGS: PDFExportSettings = {
   pageNumberStart: 1,
   showHeaderFooterOnFirstPage: true,
   headerAlignment: "right",
+  headerFontSize: 9,
+  headerFontColor: "#999999",
+  footerFontSize: 9,
+  footerFontColor: "#aaaaaa",
+  linkUnderline: true,
+  frameEnabled: false,
+  frameColor: "#000000",
+  frameThickness: 4,
+  frameMargin: 8,
+  frameStyle: "solid",
   hideFrontmatter: false,
   customFontName: "",
   autoBreakH1: false,
@@ -765,7 +785,7 @@ function buildDocCSS(s: PDFExportSettings, isRTL = false): string {
     margin: ${s.paragraphSpacing * 1.5}em 0;
   }
   .mpdf-doc img { max-width: 100%; height: auto; display: block; margin: ${s.paragraphSpacing}em auto; }
-  .mpdf-doc a { color: ${s.accentColor}; }
+  .mpdf-doc a { color: ${s.accentColor}; ${s.linkUnderline ? "" : "text-decoration: none;"} }
   .mpdf-doc a.external-link::after { display: none !important; content: none !important; }
   /* Hide copy-code buttons that survive postProcessRenderedHTML (e.g. re-injected by themes). */
   .mpdf-doc .copy-code-button { display: none !important; }
@@ -1356,7 +1376,35 @@ function buildPageLayouts(allPages: HTMLElement[][], s: PDFExportSettings): Page
   });
 }
 
-// ─── Header / footer rendering helpers ───────────────────────────────────────
+// ─── Header / footer / frame rendering helpers ───────────────────────────────
+
+/** Shorthand `border` value for the page frame, shared by the preview and export paths. */
+function frameBorderCSS(s: PDFExportSettings): string {
+  return `${s.frameThickness}px ${s.frameStyle} ${s.frameColor}`;
+}
+
+/** Builds the page-edge frame element for the live preview shadow DOM.
+ *  Inset from the page boundary by frameMargin (equal on all sides) so it
+ *  sits outside the margin-bound header, footer, and content — the
+ *  outermost decoration on the page. Returns null when the frame is disabled. */
+function buildFrameOverlayEl(s: PDFExportSettings): HTMLElement | null {
+  if (!s.frameEnabled) return null;
+  const inset = `${s.frameMargin}px`;
+  const frame = activeDocument.createElement("div");
+  frame.setCssStyles({
+    position: "absolute", top: inset, left: inset, right: inset, bottom: inset,
+    pointerEvents: "none", boxSizing: "border-box",
+    border: frameBorderCSS(s),
+  });
+  return frame;
+}
+
+/** Returns the page-edge frame markup for the export HTML. Empty string when disabled. */
+function buildFrameOverlayHTML(s: PDFExportSettings): string {
+  if (!s.frameEnabled) return "";
+  const inset = `${s.frameMargin}px`;
+  return `<div style="position:absolute;top:${inset};left:${inset};right:${inset};bottom:${inset};pointer-events:none;box-sizing:border-box;border:${frameBorderCSS(s)};"></div>`;
+}
 
 /** Appends center-or-left/right span nodes into a header/footer container element. */
 function appendHFNodes(container: HTMLElement, center: string, left: string, right: string): void {
@@ -1788,8 +1836,8 @@ class PDFExportModal extends Modal {
     const mBottom = mmToPx(s.marginBottom);
     const mLeft   = mmToPx(s.marginLeft);
     const mRight  = mmToPx(s.marginRight);
-    const footerH = s.showFooter && (s.showPageNumbers || !!s.footerText || s.showFooterBorder) ? 28 : 0;
-    const headerH = s.showHeader && (!!s.headerText || s.showHeaderBorder) ? 20 : 0;
+    const footerH = s.showFooter && (s.showPageNumbers || !!s.footerText || s.showFooterBorder) ? Math.max(28, s.footerFontSize + 14) : 0;
+    const headerH = s.showHeader && (!!s.headerText || s.showHeaderBorder) ? Math.max(20, s.headerFontSize + 10) : 0;
     // Clamp to at least 1 px so the paginator sandbox never has zero dimensions.
     const contentW = Math.max(1, pw - mLeft - mRight);
     const contentH = Math.max(1, ph - mTop - mBottom - footerH - headerH);
@@ -1904,7 +1952,7 @@ class PDFExportModal extends Modal {
         hdr.setCssStyles({
           position: "absolute", top: `${mTop * 0.4}px`, left: `${mLeft}px`, right: `${mRight}px`,
           display: "flex", alignItems: "center",
-          fontSize: "9px", color: "#999", fontFamily: fontFamily, whiteSpace: "nowrap",
+          fontSize: `${s.headerFontSize}px`, color: s.headerFontColor, fontFamily: fontFamily, whiteSpace: "nowrap",
           ...(s.showHeaderBorder ? { borderBottom: `0.5px solid ${accentColor}33` } : {}),
         });
         appendHFNodes(hdr, layout.headerCenter, layout.headerLeft, layout.headerRight);
@@ -1947,11 +1995,16 @@ class PDFExportModal extends Modal {
           position: "absolute", bottom: "0", left: "0", right: "0",
           height: `${footerH}px`, display: "flex", alignItems: "center",
           ...(s.showFooterBorder ? { borderTop: `0.5px solid ${accentColor}33` } : {}),
-          padding: `0 ${mRight}px 0 ${mLeft}px`, fontSize: "9px", color: "#aaa", fontFamily: fontFamily,
+          padding: `0 ${mRight}px 0 ${mLeft}px`, fontSize: `${s.footerFontSize}px`, color: s.footerFontColor, fontFamily: fontFamily,
         });
         appendHFNodes(footer, layout.footerCenter, layout.footerLeft, layout.footerRight);
         shadow.appendChild(footer);
       }
+
+      // ── Frame ────────────────────────────────────────────────────────────────
+      // Drawn last so it overlays the page edge on top of header/footer/content.
+      const frame = buildFrameOverlayEl(s);
+      if (frame) shadow.appendChild(frame);
     }
   }
 
@@ -1998,6 +2051,8 @@ class PDFExportModal extends Modal {
 
     const { layouts, pw, ph, mTop, mLeft, mRight, footerH, headerH, contentW, docCSS, fontFamily, accentColor: exportAccent, pageBackground, isRTL } = cache;
 
+    const frameHTML = buildFrameOverlayHTML(s);
+
     const pageHTMLParts = layouts.map((layout) => {
       const contentHTML = layout.pageNodes.map((n) => {
         const clone = n.cloneNode(true) as HTMLElement;
@@ -2013,18 +2068,18 @@ class PDFExportModal extends Modal {
       const hasExportHeader = s.showHeader && pageShowsHF && (layout.headerLeft || layout.headerCenter || layout.headerRight || s.showHeaderBorder);
       const headerBorder = s.showHeaderBorder ? `border-bottom:0.5px solid ${exportAccent}33;` : "";
       const headerHTML = hasExportHeader
-        ? `<div style="position:absolute;top:${mTop * 0.4}px;left:${mLeft}px;right:${mRight}px;display:flex;align-items:center;font-size:9px;color:#999;font-family:${fontFamily};white-space:nowrap;${headerBorder}">${buildHFInnerHTML(layout.headerCenter, layout.headerLeft, layout.headerRight)}</div>`
+        ? `<div style="position:absolute;top:${mTop * 0.4}px;left:${mLeft}px;right:${mRight}px;display:flex;align-items:center;font-size:${s.headerFontSize}px;color:${s.headerFontColor};font-family:${fontFamily};white-space:nowrap;${headerBorder}">${buildHFInnerHTML(layout.headerCenter, layout.headerLeft, layout.headerRight)}</div>`
         : "";
 
       const hasExportFooter = s.showFooter && pageShowsHF && (layout.footerLeft || layout.footerRight || layout.footerCenter || s.showFooterBorder);
       const footerBorder = s.showFooterBorder ? `border-top:0.5px solid ${exportAccent}33;` : "";
       const footerHTML = hasExportFooter
-        ? `<div style="position:absolute;bottom:0;left:0;right:0;height:${footerH}px;display:flex;align-items:center;${footerBorder}padding:0 ${mRight}px 0 ${mLeft}px;font-size:9px;color:#aaa;font-family:${fontFamily};">${buildHFInnerHTML(layout.footerCenter, layout.footerLeft, layout.footerRight)}</div>`
+        ? `<div style="position:absolute;bottom:0;left:0;right:0;height:${footerH}px;display:flex;align-items:center;${footerBorder}padding:0 ${mRight}px 0 ${mLeft}px;font-size:${s.footerFontSize}px;color:${s.footerFontColor};font-family:${fontFamily};">${buildHFInnerHTML(layout.footerCenter, layout.footerLeft, layout.footerRight)}</div>`
         : "";
 
       const contentDivHTML = `<div class="mpdf-doc"${isRTL ? ' dir="rtl"' : ''} style="position:absolute;top:${mTop + headerH}px;left:${mLeft}px;width:${contentW}px;">${contentHTML}</div>`;
 
-      return `<div class="mpdf-export-page">${headerHTML}${contentDivHTML}${footerHTML}</div>`;
+      return `<div class="mpdf-export-page">${headerHTML}${contentDivHTML}${footerHTML}${frameHTML}</div>`;
     });
 
     const printCSS = `
@@ -2222,18 +2277,23 @@ class PDFExportSettingTab extends PluginSettingTab {
 
     // ── Margins ───────────────────────────────────────────────────────────────
     new Setting(containerEl).setName("Margins (mm)").setHeading();
-    type MarginKey = "marginTop" | "marginBottom" | "marginLeft" | "marginRight";
-    const marginSetting = (name: string, key: MarginKey) =>
-      new Setting(containerEl).setName(name).addText((t) =>
+    type NumericFieldKey = "marginTop" | "marginBottom" | "marginLeft" | "marginRight"
+      | "headerFontSize" | "footerFontSize" | "frameThickness" | "frameMargin";
+    const numberSetting = (name: string, key: NumericFieldKey, min?: number, desc?: string) => {
+      const setting = new Setting(containerEl).setName(name);
+      if (desc) setting.setDesc(desc);
+      return setting.addText((t) =>
         t.setValue(String(s[key])).onChange((v) => {
-          s[key] = parseInt(v) || 0;
+          const n = parseInt(v, 10) || 0;
+          s[key] = min !== undefined ? Math.max(min, n) : n;
           void this.markDirty();
         }),
       );
-    marginSetting("Top",    "marginTop");
-    marginSetting("Bottom", "marginBottom");
-    marginSetting("Left",   "marginLeft");
-    marginSetting("Right",  "marginRight");
+    };
+    numberSetting("Top",    "marginTop");
+    numberSetting("Bottom", "marginBottom");
+    numberSetting("Left",   "marginLeft");
+    numberSetting("Right",  "marginRight");
 
     // ── Typography ────────────────────────────────────────────────────────────
     new Setting(containerEl).setName("Typography").setHeading();
@@ -2298,7 +2358,8 @@ class PDFExportSettingTab extends PluginSettingTab {
     // ── Colors ────────────────────────────────────────────────────────────────
     new Setting(containerEl).setName("Colors").setHeading();
     type ColorKey = "accentColor" | "bodyColor" | "headingColor" | "pageBackground"
-      | "blockquoteBg" | "blockquoteBorderColor" | "tableHeaderBg" | "codeBackground";
+      | "blockquoteBg" | "blockquoteBorderColor" | "tableHeaderBg" | "codeBackground"
+      | "headerFontColor" | "footerFontColor" | "frameColor";
     const colorSetting = (name: string, key: ColorKey) =>
       new Setting(containerEl).setName(name).addColorPicker((cp) =>
         cp.setValue(s[key]).onChange((v) => {
@@ -2358,6 +2419,8 @@ class PDFExportSettingTab extends PluginSettingTab {
        .setValue(s.headerAlignment)
        .onChange((v) => { s.headerAlignment = v as "left"|"center"|"right"; void this.markDirty(); }),
     );
+    numberSetting("Header font size (px)", "headerFontSize", 1);
+    colorSetting("Header font color", "headerFontColor");
     new Setting(containerEl).setName("Header border").setDesc("Show the separator line below the header.").addToggle((t) =>
       t.setValue(s.showHeaderBorder).onChange((v) => { s.showHeaderBorder = v; void this.markDirty(); }),
     );
@@ -2367,6 +2430,8 @@ class PDFExportSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName("Footer text")
       .addText((t) => t.setValue(s.footerText).onChange((v) => { s.footerText = v; void this.markDirty(); }));
+    numberSetting("Footer font size (px)", "footerFontSize", 1);
+    colorSetting("Footer font color", "footerFontColor");
     new Setting(containerEl).setName("Footer border").setDesc("Show the separator line above the footer.").addToggle((t) =>
       t.setValue(s.showFooterBorder).onChange((v) => { s.showFooterBorder = v; void this.markDirty(); }),
     );
@@ -2399,6 +2464,40 @@ class PDFExportSettingTab extends PluginSettingTab {
         }),
       );
 
+    // ── Frame ─────────────────────────────────────────────────────────────────
+    new Setting(containerEl).setName("Frame").setHeading();
+    let frameColorSetting: Setting;
+    let frameThicknessSetting: Setting;
+    let frameMarginSetting: Setting;
+    let frameStyleSetting: Setting;
+    const toggleFrameSettingsVisibility = (visible: boolean) => {
+      [frameColorSetting, frameThicknessSetting, frameMarginSetting, frameStyleSetting].forEach((setting) =>
+        setting.settingEl.toggleClass("mpdf-is-hidden", !visible),
+      );
+    };
+    new Setting(containerEl)
+      .setName("Enable frame")
+      .setDesc("Draws a border around the outer edge of every page — the outermost decoration. The header, footer, and content all render inside it.")
+      .addToggle((t) =>
+        t.setValue(s.frameEnabled).onChange((v) => {
+          s.frameEnabled = v;
+          toggleFrameSettingsVisibility(v);
+          void this.markDirty();
+        }),
+      );
+    frameColorSetting = colorSetting("Frame color", "frameColor");
+    frameThicknessSetting = numberSetting("Frame thickness (px)", "frameThickness", 1);
+    frameMarginSetting = numberSetting(
+      "Frame margin (px)", "frameMargin", 0,
+      "Gap between the page edge and the frame, applied equally on all four sides.",
+    );
+    frameStyleSetting = new Setting(containerEl).setName("Frame style").addDropdown((d) =>
+      d.addOptions({ solid: "Solid", dashed: "Dashed", dotted: "Dotted", double: "Double", groove: "Groove", ridge: "Ridge" })
+       .setValue(s.frameStyle)
+       .onChange((v) => { s.frameStyle = v as PDFExportSettings["frameStyle"]; void this.markDirty(); }),
+    );
+    toggleFrameSettingsVisibility(s.frameEnabled);
+
     // ── Behaviour ─────────────────────────────────────────────────────────────
     new Setting(containerEl).setName("Behaviour").setHeading();
     new Setting(containerEl)
@@ -2420,6 +2519,12 @@ class PDFExportSettingTab extends PluginSettingTab {
           s.includeFilenameAsTitle = v;
           void this.markDirty();
         }),
+      );
+    new Setting(containerEl)
+      .setName("Underline links")
+      .setDesc("Applies to both internal (in-document) and external links.")
+      .addToggle((t) =>
+        t.setValue(s.linkUnderline).onChange((v) => { s.linkUnderline = v; void this.markDirty(); }),
       );
     new Setting(containerEl).setName("Auto page break before H1").addToggle((t) =>
       t.setValue(s.autoBreakH1).onChange((v) => { s.autoBreakH1 = v; void this.markDirty(); }),
