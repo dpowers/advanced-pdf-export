@@ -107,6 +107,7 @@ interface PDFExportSettings extends DocStyle {
   showHeaderOnFirstPage: boolean;
   showFooterOnFirstPage: boolean;
   headerAlignment: "left" | "center" | "right";
+  footerTextAlignment: "left" | "center" | "right";
   headerFontSize: number;
   headerFontColor: string;
   footerFontSize: number;
@@ -369,7 +370,8 @@ const DEFAULT_SETTINGS: PDFExportSettings = {
   pageNumberStart: 1,
   showHeaderOnFirstPage: true,
   showFooterOnFirstPage: true,
-  headerAlignment: "right",
+  headerAlignment:     "right",
+  footerTextAlignment: "left",
   headerFontSize: 9,
   headerFontColor: "#999999",
   footerFontSize: 9,
@@ -1399,18 +1401,18 @@ function buildPageLayouts(allPages: HTMLElement[][], s: PDFExportSettings): Page
     let headerLeft = "", headerCenter = "", headerRight = "";
 
     if (showFooter) {
+      // Place footer text in its alignment zone.
+      if (s.footerText) {
+        if      (s.footerTextAlignment === "center") footerCenter = s.footerText;
+        else if (s.footerTextAlignment === "left")   footerLeft   = s.footerText;
+        else                                          footerRight  = s.footerText;
+      }
+      // Place page number in its own zone; merge with a separator when both land in the same slot.
       if (s.showPageNumbers) {
-        if (s.pageNumberPosition === "center") {
-          footerCenter = (s.footerText ? s.footerText + " — " : "") + numStr;
-        } else if (s.pageNumberPosition === "left") {
-          footerLeft  = numStr;
-          footerRight = s.footerText ?? "";
-        } else {
-          footerLeft  = s.footerText ?? "";
-          footerRight = numStr;
-        }
-      } else {
-        footerLeft = s.footerText ?? "";
+        const join = (existing: string) => existing ? existing + " — " + numStr : numStr;
+        if      (s.pageNumberPosition === "center") footerCenter = join(footerCenter);
+        else if (s.pageNumberPosition === "left")   footerLeft   = join(footerLeft);
+        else                                         footerRight  = join(footerRight);
       }
     }
 
@@ -2687,6 +2689,11 @@ class PDFExportSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName("Footer text")
       .addText((t) => t.setValue(s.footerText).onChange((v) => { s.footerText = v; void this.markDirty(); }));
+    new Setting(containerEl).setName("Alignment").addDropdown((d) =>
+      d.addOptions({ left: "Left", center: "Center", right: "Right" })
+       .setValue(s.footerTextAlignment)
+       .onChange((v) => { s.footerTextAlignment = v as "left" | "center" | "right"; void this.markDirty(); }),
+    );
     numberSetting("Font size (px)", "footerFontSize", 1);
     numberSetting("Height (px)", "footerHeight", 0, "Explicit band height (0 = auto).");
     colorSetting("Font color", "footerFontColor");
