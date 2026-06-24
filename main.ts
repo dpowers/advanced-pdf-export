@@ -126,6 +126,32 @@ interface PDFExportSettings extends DocStyle {
   customPageWidth: number;
   /** Height in mm, used only when pageSize === "Custom". */
   customPageHeight: number;
+
+  // ── Header/footer band sizing ─────────────────────────────────────────────────
+  /** Explicit header band height in px. 0 = auto (derived from headerFontSize). */
+  headerHeight: number;
+  /** Explicit footer band height in px. 0 = auto (derived from footerFontSize). */
+  footerHeight: number;
+
+  // ── Header/footer banner images ──────────────────────────────────────────────
+  /** Vault-relative path or https:// URL for a banner image behind the header text. */
+  headerImagePath: string;
+  /** Left/right gap in px between the banner image and the page edges (0 = edge-to-edge). */
+  headerImageMargin: number;
+  footerImagePath: string;
+  /** Left/right gap in px between the banner image and the page edges. */
+  footerImageMargin: number;
+
+  // ── Page background (color OR image — mutually exclusive) ─────────────────────
+  /** When true, backgroundImagePath is used instead of the pageBackground color. */
+  backgroundImageEnabled: boolean;
+  backgroundImagePath: string;
+  /** How the image fills the background zone. */
+  backgroundImageSize: "cover" | "contain" | "fill" | "tile";
+  /** "full-page": behind header+content+footer. "content-only": text zone only. */
+  backgroundImageScope: "full-page" | "content-only";
+  /** 0–1 opacity for the background image layer. */
+  backgroundImageOpacity: number;
 }
 
 // Cached layout — holds everything drawPreview and exportPDF need so that
@@ -360,6 +386,20 @@ const DEFAULT_SETTINGS: PDFExportSettings = {
   previewScale: 0.90,
   customPageWidth: 210,   // A4 width in mm
   customPageHeight: 297,  // A4 height in mm
+  // Band sizing (0 = auto from font size)
+  headerHeight: 0,
+  footerHeight: 0,
+  // Banner images (header / footer background)
+  headerImagePath: "",
+  headerImageMargin: 0,
+  footerImagePath: "",
+  footerImageMargin: 0,
+  // Page background
+  backgroundImageEnabled: false,
+  backgroundImagePath: "",
+  backgroundImageSize: "cover",
+  backgroundImageScope: "full-page",
+  backgroundImageOpacity: 1,
 };
 
 // ─── Utilities ────────────────────────────────────────────────────────────────
@@ -394,6 +434,19 @@ function escapeHTML(s: string): string {
 // <style> block early, regardless of where the sequence appears.
 function escapeCSSForStyle(css: string): string {
   return css.replace(/<\/style/gi, "<\\/style");
+}
+
+/** Converts a vault-relative path or bare filename to an app:// resource URL,
+ *  or passes https:// / data: URLs through unchanged. Returns "" for blank input. */
+function resolveImageUrl(app: App, imagePath: string): string {
+  const trimmed = imagePath.trim();
+  if (!trimmed) return "";
+  if (/^(https?:|data:)/i.test(trimmed)) return trimmed;
+  const direct = app.vault.getAbstractFileByPath(trimmed);
+  if (direct instanceof TFile) return app.vault.getResourcePath(direct);
+  const resolved = app.metadataCache.getFirstLinkpathDest(trimmed, "");
+  if (resolved instanceof TFile) return app.vault.getResourcePath(resolved);
+  return trimmed;
 }
 
 /** True when RTL script chars (Arabic, Hebrew, etc.) exceed 10 % of all
@@ -1836,8 +1889,12 @@ class PDFExportModal extends Modal {
     const mBottom = mmToPx(s.marginBottom);
     const mLeft   = mmToPx(s.marginLeft);
     const mRight  = mmToPx(s.marginRight);
-    const footerH = s.showFooter && (s.showPageNumbers || !!s.footerText || s.showFooterBorder) ? Math.max(28, s.footerFontSize + 14) : 0;
-    const headerH = s.showHeader && (!!s.headerText || s.showHeaderBorder) ? Math.max(20, s.headerFontSize + 10) : 0;
+    const footerH = s.showFooter && (s.showPageNumbers || !!s.footerText || s.showFooterBorder || !!s.footerImagePath)
+      ? (s.footerHeight > 0 ? s.footerHeight : Math.max(28, s.footerFontSize + 14))
+      : 0;
+    const headerH = s.showHeader && (!!s.headerText || s.showHeaderBorder || !!s.headerImagePath)
+      ? (s.headerHeight > 0 ? s.headerHeight : Math.max(20, s.headerFontSize + 10))
+      : 0;
     // Clamp to at least 1 px so the paginator sandbox never has zero dimensions.
     const contentW = Math.max(1, pw - mLeft - mRight);
     const contentH = Math.max(1, ph - mTop - mBottom - footerH - headerH);
@@ -1886,7 +1943,7 @@ class PDFExportModal extends Modal {
   }
 
   private drawPreview(c: LayoutCache, scale: number) {
-    const { layouts, pw, ph, mTop, mLeft, mRight, footerH, headerH, contentW, docCSS, fontFamily, accentColor, pageBackground, isRTL } = c;
+    const { layouts, pw, ph, mTop, mLeft, mRight, footerH, headerH, contentW, contentH, docCSS, fontFamily, accentColor, pageBackground, isRTL } = c;
     const s = this.plugin.settings;
     this.previewEl.empty();
 
@@ -1944,13 +2001,61 @@ class PDFExportModal extends Modal {
       const shadow = shadowHost.attachShadow({ mode: "open" });
       shadow.adoptedStyleSheets = [pageSheet];
 
-      // ── Header ───────────────────────────────────────────────────────────────
+      // ── Page background image (appended first — behind everything) ─────────────
+      if (s.backgroundImageEnabled && s.backgroundImagePath) {
+        const bgUrl = resolveImageUrl(this.app, s.backgroundImagePath);
+        if (bgUrl) {
+          const isContentOnly = s.backgroundImageScope === "content-only";
+          const bgEl = activeDocument.createElement("div");
+          bgEl.setCssStyles({
+            position: "absolute",
+            ...(isContentOnly
+              ? { top: `${mTop + headerH}px`, left: `${mLeft}px`, width: `${contentW}px`, height: `${contentH}px` }
+              : { inset: "0" }),
+            backgroundImage:    `url('${bgUrl}')`,
+            backgroundRepeat:   s.backgroundImageSize === "tile" ? "repeat" : "no-repeat",
+            backgroundSize:     s.backgroundImageSize === "cover"   ? "cover"
+                              : s.backgroundImageSize === "contain" ? "contain"
+                              : s.backgroundImageSize === "fill"    ? "100% 100%"
+                              : "auto",
+            backgroundPosition: "center",
+            opacity:            String(s.backgroundImageOpacity),
+            pointerEvents:      "none",
+          });
+          shadow.appendChild(bgEl);
+        }
+      }
+
       const pageShowsHF = s.showHeaderFooterOnFirstPage || layout.pageNum > 1;
+
+      // ── Header banner image (behind header text) ──────────────────────────────
+      if (pageShowsHF && s.showHeader && s.headerImagePath) {
+        const imgUrl = resolveImageUrl(this.app, s.headerImagePath);
+        if (imgUrl) {
+          const bannerEl = activeDocument.createElement("div");
+          bannerEl.setCssStyles({
+            position: "absolute",
+            top: `${mTop * 0.4}px`,
+            left: `${s.headerImageMargin}px`,
+            right: `${s.headerImageMargin}px`,
+            height: `${headerH}px`,
+            backgroundImage: `url('${imgUrl}')`,
+            backgroundSize: "cover",
+            backgroundPosition: "center",
+            backgroundRepeat: "no-repeat",
+            pointerEvents: "none",
+          });
+          shadow.appendChild(bannerEl);
+        }
+      }
+
+      // ── Header text ──────────────────────────────────────────────────────────
       const hasHeader = s.showHeader && pageShowsHF && (layout.headerLeft || layout.headerCenter || layout.headerRight || s.showHeaderBorder);
       if (hasHeader) {
         const hdr = activeDocument.createElement("div");
         hdr.setCssStyles({
           position: "absolute", top: `${mTop * 0.4}px`, left: `${mLeft}px`, right: `${mRight}px`,
+          height: `${headerH}px`,
           display: "flex", alignItems: "center",
           fontSize: `${s.headerFontSize}px`, color: s.headerFontColor, fontFamily: fontFamily, whiteSpace: "nowrap",
           ...(s.showHeaderBorder ? { borderBottom: `0.5px solid ${accentColor}33` } : {}),
@@ -1987,7 +2092,28 @@ class PDFExportModal extends Modal {
         }
       });
 
-      // ── Footer ───────────────────────────────────────────────────────────────
+      // ── Footer banner image (behind footer text) ──────────────────────────────
+      if (pageShowsHF && s.showFooter && s.footerImagePath) {
+        const imgUrl = resolveImageUrl(this.app, s.footerImagePath);
+        if (imgUrl) {
+          const bannerEl = activeDocument.createElement("div");
+          bannerEl.setCssStyles({
+            position: "absolute",
+            bottom: "0",
+            left: `${s.footerImageMargin}px`,
+            right: `${s.footerImageMargin}px`,
+            height: `${footerH}px`,
+            backgroundImage: `url('${imgUrl}')`,
+            backgroundSize: "cover",
+            backgroundPosition: "center",
+            backgroundRepeat: "no-repeat",
+            pointerEvents: "none",
+          });
+          shadow.appendChild(bannerEl);
+        }
+      }
+
+      // ── Footer text ───────────────────────────────────────────────────────────
       const hasFooter = s.showFooter && pageShowsHF && (layout.footerLeft || layout.footerRight || layout.footerCenter || s.showFooterBorder);
       if (hasFooter) {
         const footer = activeDocument.createElement("div");
@@ -2049,9 +2175,31 @@ class PDFExportModal extends Modal {
       return;
     }
 
-    const { layouts, pw, ph, mTop, mLeft, mRight, footerH, headerH, contentW, docCSS, fontFamily, accentColor: exportAccent, pageBackground, isRTL } = cache;
+    const { layouts, pw, ph, mTop, mLeft, mRight, footerH, headerH, contentW, contentH, docCSS, fontFamily, accentColor: exportAccent, pageBackground, isRTL } = cache;
 
     const frameHTML = buildFrameOverlayHTML(s);
+
+    // ── Resolve image URLs once (app:// works in Electron's BrowserWindow) ──────
+    const resolvedHeaderBannerUrl = (s.showHeader && s.headerImagePath)
+      ? resolveImageUrl(this.app, s.headerImagePath) : "";
+    const resolvedFooterBannerUrl = (s.showFooter && s.footerImagePath)
+      ? resolveImageUrl(this.app, s.footerImagePath) : "";
+    const resolvedBgImgUrl = (s.backgroundImageEnabled && s.backgroundImagePath)
+      ? resolveImageUrl(this.app, s.backgroundImagePath) : "";
+
+    // Page background image HTML (identical on every page; rendered first so it's behind everything)
+    const bgImgHTML = resolvedBgImgUrl ? (() => {
+      const sz = s.backgroundImageSize === "cover"   ? "cover"
+               : s.backgroundImageSize === "contain" ? "contain"
+               : s.backgroundImageSize === "fill"    ? "100% 100%"
+               : "auto";
+      const rp  = s.backgroundImageSize === "tile" ? "repeat" : "no-repeat";
+      const pos = s.backgroundImageScope === "content-only"
+        ? `top:${mTop + headerH}px;left:${mLeft}px;width:${contentW}px;height:${contentH}px;`
+        : `inset:0;`;
+      const common = `background-image:url('${resolvedBgImgUrl}');background-size:${sz};background-repeat:${rp};background-position:center;opacity:${s.backgroundImageOpacity};pointer-events:none;`;
+      return `<div style="position:absolute;${pos}${common}"></div>`;
+    })() : "";
 
     const pageHTMLParts = layouts.map((layout) => {
       const contentHTML = layout.pageNodes.map((n) => {
@@ -2079,7 +2227,15 @@ class PDFExportModal extends Modal {
 
       const contentDivHTML = `<div class="mpdf-doc"${isRTL ? ' dir="rtl"' : ''} style="position:absolute;top:${mTop + headerH}px;left:${mLeft}px;width:${contentW}px;">${contentHTML}</div>`;
 
-      return `<div class="mpdf-export-page">${headerHTML}${contentDivHTML}${footerHTML}${frameHTML}</div>`;
+      // Banner divs precede their text divs so DOM order puts text on top.
+      const headerBannerHTML = (pageShowsHF && resolvedHeaderBannerUrl)
+        ? `<div style="position:absolute;top:${mTop * 0.4}px;left:${s.headerImageMargin}px;right:${s.headerImageMargin}px;height:${headerH}px;background-image:url('${resolvedHeaderBannerUrl}');background-size:cover;background-position:center;background-repeat:no-repeat;pointer-events:none;"></div>`
+        : "";
+      const footerBannerHTML = (pageShowsHF && resolvedFooterBannerUrl)
+        ? `<div style="position:absolute;bottom:0;left:${s.footerImageMargin}px;right:${s.footerImageMargin}px;height:${footerH}px;background-image:url('${resolvedFooterBannerUrl}');background-size:cover;background-position:center;background-repeat:no-repeat;pointer-events:none;"></div>`
+        : "";
+
+      return `<div class="mpdf-export-page">${bgImgHTML}${headerBannerHTML}${headerHTML}${contentDivHTML}${footerBannerHTML}${footerHTML}${frameHTML}</div>`;
     });
 
     const printCSS = `
@@ -2218,7 +2374,31 @@ class PDFExportSettingTab extends PluginSettingTab {
     containerEl.empty();
     const s = this.plugin.settings;
 
-    // ── Style Preset ──────────────────────────────────────────────────────────
+    // Shared helpers ────────────────────────────────────────────────────────────
+    type NumericFieldKey = "marginTop" | "marginBottom" | "marginLeft" | "marginRight"
+      | "headerFontSize" | "footerFontSize" | "frameThickness" | "frameMargin"
+      | "headerHeight" | "footerHeight" | "headerImageMargin" | "footerImageMargin";
+    const numberSetting = (name: string, key: NumericFieldKey, min?: number, desc?: string) => {
+      const st = new Setting(containerEl).setName(name);
+      if (desc) st.setDesc(desc);
+      return st.addText((t) =>
+        t.setValue(String(s[key])).onChange((v) => {
+          const n = parseInt(v, 10) || 0;
+          s[key] = min !== undefined ? Math.max(min, n) : n;
+          void this.markDirty();
+        }),
+      );
+    };
+
+    type ColorKey = "accentColor" | "bodyColor" | "headingColor" | "pageBackground"
+      | "blockquoteBg" | "blockquoteBorderColor" | "tableHeaderBg" | "codeBackground"
+      | "headerFontColor" | "footerFontColor" | "frameColor";
+    const colorSetting = (name: string, key: ColorKey) =>
+      new Setting(containerEl).setName(name).addColorPicker((cp) =>
+        cp.setValue(s[key]).onChange((v) => { s[key] = v; void this.markDirty(); }),
+      );
+
+    // ── 1. Style Preset ───────────────────────────────────────────────────────
     new Setting(containerEl).setName("Style Preset").setHeading();
     new Setting(containerEl)
       .setName("Preset")
@@ -2239,11 +2419,9 @@ class PDFExportSettingTab extends PluginSettingTab {
          }),
       );
 
-    // ── Page ──────────────────────────────────────────────────────────────────
+    // ── 2. Page ───────────────────────────────────────────────────────────────
     new Setting(containerEl).setName("Page").setHeading();
-
     let customPageSizeSetting: Setting;
-
     new Setting(containerEl).setName("Page size").addDropdown((d) => {
       Object.keys(PAGE_SIZES).forEach((k) => { d.addOption(k, k); });
       d.addOption("Custom", "Custom…");
@@ -2253,7 +2431,6 @@ class PDFExportSettingTab extends PluginSettingTab {
         void this.markDirty();
       });
     });
-
     customPageSizeSetting = new Setting(containerEl)
       .setName("Custom page size (mm)")
       .setDesc("Width × Height in millimetres.")
@@ -2269,33 +2446,63 @@ class PDFExportSettingTab extends PluginSettingTab {
     new Setting(containerEl).setName("Orientation").addDropdown((d) =>
       d.addOptions({ portrait: "Portrait", landscape: "Landscape" })
        .setValue(s.orientation)
-       .onChange((v) => {
-         s.orientation = v as "portrait" | "landscape";
-         void this.markDirty();
-       }),
+       .onChange((v) => { s.orientation = v as "portrait" | "landscape"; void this.markDirty(); }),
     );
 
-    // ── Margins ───────────────────────────────────────────────────────────────
-    new Setting(containerEl).setName("Margins (mm)").setHeading();
-    type NumericFieldKey = "marginTop" | "marginBottom" | "marginLeft" | "marginRight"
-      | "headerFontSize" | "footerFontSize" | "frameThickness" | "frameMargin";
-    const numberSetting = (name: string, key: NumericFieldKey, min?: number, desc?: string) => {
-      const setting = new Setting(containerEl).setName(name);
-      if (desc) setting.setDesc(desc);
-      return setting.addText((t) =>
-        t.setValue(String(s[key])).onChange((v) => {
-          const n = parseInt(v, 10) || 0;
-          s[key] = min !== undefined ? Math.max(min, n) : n;
+    // ── 3. Margin & Frame ─────────────────────────────────────────────────────
+    new Setting(containerEl).setName("Margin & Frame").setHeading();
+    new Setting(containerEl)
+      .setName("Margins (mm)")
+      .setDesc("Top · Bottom · Left · Right")
+      .addText((t) =>
+        t.setPlaceholder("Top").setValue(String(s.marginTop))
+         .onChange((v) => { s.marginTop    = parseInt(v, 10) || 0; void this.markDirty(); }),
+      )
+      .addText((t) =>
+        t.setPlaceholder("Bottom").setValue(String(s.marginBottom))
+         .onChange((v) => { s.marginBottom = parseInt(v, 10) || 0; void this.markDirty(); }),
+      )
+      .addText((t) =>
+        t.setPlaceholder("Left").setValue(String(s.marginLeft))
+         .onChange((v) => { s.marginLeft   = parseInt(v, 10) || 0; void this.markDirty(); }),
+      )
+      .addText((t) =>
+        t.setPlaceholder("Right").setValue(String(s.marginRight))
+         .onChange((v) => { s.marginRight  = parseInt(v, 10) || 0; void this.markDirty(); }),
+      );
+
+    let frameColorSetting: Setting;
+    let frameThicknessSetting: Setting;
+    let frameMarginSetting: Setting;
+    let frameStyleSetting: Setting;
+    const toggleFrameSettings = (visible: boolean) => {
+      [frameColorSetting, frameThicknessSetting, frameMarginSetting, frameStyleSetting]
+        .forEach((st) => st.settingEl.toggleClass("mpdf-is-hidden", !visible));
+    };
+    new Setting(containerEl)
+      .setName("Enable frame")
+      .setDesc("Draws a border around the outer edge of every page. Header, footer, and content all render inside it.")
+      .addToggle((t) =>
+        t.setValue(s.frameEnabled).onChange((v) => {
+          s.frameEnabled = v;
+          toggleFrameSettings(v);
           void this.markDirty();
         }),
       );
-    };
-    numberSetting("Top",    "marginTop");
-    numberSetting("Bottom", "marginBottom");
-    numberSetting("Left",   "marginLeft");
-    numberSetting("Right",  "marginRight");
+    frameColorSetting     = colorSetting("Frame color", "frameColor");
+    frameThicknessSetting = numberSetting("Frame thickness (px)", "frameThickness", 1);
+    frameMarginSetting    = numberSetting(
+      "Frame margin (px)", "frameMargin", 0,
+      "Gap between the page edge and the frame, applied equally on all four sides.",
+    );
+    frameStyleSetting = new Setting(containerEl).setName("Frame style").addDropdown((d) =>
+      d.addOptions({ solid: "Solid", dashed: "Dashed", dotted: "Dotted", double: "Double", groove: "Groove", ridge: "Ridge" })
+       .setValue(s.frameStyle)
+       .onChange((v) => { s.frameStyle = v as PDFExportSettings["frameStyle"]; void this.markDirty(); }),
+    );
+    toggleFrameSettings(s.frameEnabled);
 
-    // ── Typography ────────────────────────────────────────────────────────────
+    // ── 4. Typography ─────────────────────────────────────────────────────────
     new Setting(containerEl).setName("Typography").setHeading();
     let customFontSetting: Setting;
     new Setting(containerEl).setName("Font family").addDropdown((d) =>
@@ -2326,10 +2533,7 @@ class PDFExportSettingTab extends PluginSettingTab {
     customFontSetting.settingEl.toggleClass("mpdf-is-hidden", s.fontFamily !== "__custom__");
     new Setting(containerEl).setName("Font size (px)").addDropdown((d) => {
       ["10","11","12","13","14","15","16"].forEach((v) => { d.addOption(v, v + "px"); });
-      d.setValue(String(s.fontSize)).onChange((v) => {
-        s.fontSize = parseInt(v);
-        void this.markDirty();
-      });
+      d.setValue(String(s.fontSize)).onChange((v) => { s.fontSize = parseInt(v); void this.markDirty(); });
     });
     new Setting(containerEl).setName("Code font size").addDropdown((d) =>
       d.addOptions({ "0.75": "0.75em", "0.80": "0.80em", "0.82": "0.82em", "0.85": "0.85em", "0.88": "0.88em", "0.90": "0.90em", "1.0": "1.00em" })
@@ -2355,58 +2559,94 @@ class PDFExportSettingTab extends PluginSettingTab {
          .onChange((v) => { s.headingScale = parseFloat(v); void this.markDirty(); }),
       );
 
-    // ── Colors ────────────────────────────────────────────────────────────────
-    new Setting(containerEl).setName("Colors").setHeading();
-    type ColorKey = "accentColor" | "bodyColor" | "headingColor" | "pageBackground"
-      | "blockquoteBg" | "blockquoteBorderColor" | "tableHeaderBg" | "codeBackground"
-      | "headerFontColor" | "footerFontColor" | "frameColor";
-    const colorSetting = (name: string, key: ColorKey) =>
-      new Setting(containerEl).setName(name).addColorPicker((cp) =>
-        cp.setValue(s[key]).onChange((v) => {
-          s[key] = v;
+    // ── 5. Background ─────────────────────────────────────────────────────────
+    new Setting(containerEl).setName("Background").setHeading();
+    let bgColorSetting: Setting;
+    let bgImgPathSetting: Setting;
+    let bgImgSizeSetting: Setting;
+    let bgImgScopeSetting: Setting;
+    let bgImgOpacitySetting: Setting;
+    const showBgMode = (useImage: boolean) => {
+      bgColorSetting.settingEl.toggleClass("mpdf-is-hidden", useImage);
+      [bgImgPathSetting, bgImgSizeSetting, bgImgScopeSetting, bgImgOpacitySetting]
+        .forEach((st) => st.settingEl.toggleClass("mpdf-is-hidden", !useImage));
+    };
+    new Setting(containerEl)
+      .setName("Use image background")
+      .setDesc("When on, a background image is used instead of the solid background color.")
+      .addToggle((t) =>
+        t.setValue(s.backgroundImageEnabled).onChange((v) => {
+          s.backgroundImageEnabled = v;
+          showBgMode(v);
           void this.markDirty();
         }),
       );
+    bgColorSetting = new Setting(containerEl)
+      .setName("Page background color")
+      .addColorPicker((cp) =>
+        cp.setValue(s.pageBackground).onChange((v) => { s.pageBackground = v; void this.markDirty(); }),
+      );
+    bgImgPathSetting = new Setting(containerEl)
+      .setName("Background image")
+      .setDesc("Vault-relative path or https:// URL.")
+      .addText((t) =>
+        t.setPlaceholder("assets/background.png").setValue(s.backgroundImagePath)
+         .onChange((v) => { s.backgroundImagePath = v; void this.markDirty(); }),
+      );
+    bgImgSizeSetting = new Setting(containerEl).setName("Fit").addDropdown((d) =>
+      d.addOptions({
+        cover:   "Cover (fill, crop edges)",
+        contain: "Contain (fit, show gaps)",
+        fill:    "Fill (stretch to exact size)",
+        tile:    "Tile (repeat)",
+      })
+       .setValue(s.backgroundImageSize)
+       .onChange((v) => { s.backgroundImageSize = v as PDFExportSettings["backgroundImageSize"]; void this.markDirty(); }),
+    );
+    bgImgScopeSetting = new Setting(containerEl)
+      .setName("Scope")
+      .setDesc("Full page includes header and footer bands. Content area only restricts the background to the text zone between them.")
+      .addDropdown((d) =>
+        d.addOptions({ "full-page": "Full page", "content-only": "Content area only" })
+         .setValue(s.backgroundImageScope)
+         .onChange((v) => { s.backgroundImageScope = v as PDFExportSettings["backgroundImageScope"]; void this.markDirty(); }),
+      );
+    bgImgOpacitySetting = new Setting(containerEl).setName("Opacity").addDropdown((d) =>
+      d.addOptions({ "0.05": "5%", "0.1": "10%", "0.15": "15%", "0.2": "20%", "0.3": "30%", "0.4": "40%", "0.5": "50%", "0.6": "60%", "0.7": "70%", "0.8": "80%", "0.9": "90%", "1": "100%" })
+       .setValue(String(s.backgroundImageOpacity))
+       .onChange((v) => { s.backgroundImageOpacity = parseFloat(v); void this.markDirty(); }),
+    );
+    showBgMode(s.backgroundImageEnabled);
+
+    // ── 6. Colors ─────────────────────────────────────────────────────────────
+    new Setting(containerEl).setName("Colors").setHeading();
     colorSetting("Accent color",            "accentColor");
     colorSetting("Body text color",         "bodyColor");
     colorSetting("Heading color",           "headingColor");
-    colorSetting("Page background",         "pageBackground");
     colorSetting("Blockquote background",   "blockquoteBg");
     colorSetting("Blockquote border",       "blockquoteBorderColor");
     colorSetting("Table header background", "tableHeaderBg");
     colorSetting("Code background",         "codeBackground");
-
     new Setting(containerEl)
       .setName("Code syntax theme")
       .setDesc("Independent of your Obsidian theme. \"None\" uses the body text color and code background above with no highlighting.")
       .addDropdown((d) => {
         const opts: Record<string, string> = {};
         for (const [key, theme] of Object.entries(CODE_THEMES)) opts[key] = theme.name;
-        d.addOptions(opts)
-         .setValue(s.codeTheme)
-         .onChange((v) => { s.codeTheme = v; void this.markDirty(); });
+        d.addOptions(opts).setValue(s.codeTheme).onChange((v) => { s.codeTheme = v; void this.markDirty(); });
       });
 
-    // ── Heading style ─────────────────────────────────────────────────────────
-    new Setting(containerEl).setName("Heading Style").setHeading();
-    new Setting(containerEl).setName("H1 bottom border").addToggle((t) =>
-      t.setValue(s.h1BorderBottom).onChange((v) => { s.h1BorderBottom = v; void this.markDirty(); }),
-    );
-    new Setting(containerEl).setName("H2 bottom border").addToggle((t) =>
-      t.setValue(s.h2BorderBottom).onChange((v) => { s.h2BorderBottom = v; void this.markDirty(); }),
-    );
-    new Setting(containerEl).setName("Center H1").addToggle((t) =>
-      t.setValue(s.centerH1).onChange((v) => { s.centerH1 = v; void this.markDirty(); }),
-    );
-
-    // ── Tables ────────────────────────────────────────────────────────────────
-    new Setting(containerEl).setName("Tables").setHeading();
-    new Setting(containerEl).setName("Striped rows").addToggle((t) =>
-      t.setValue(s.tableStriped).onChange((v) => { s.tableStriped = v; void this.markDirty(); }),
-    );
-
-    // ── Header & Footer ───────────────────────────────────────────────────────
-    new Setting(containerEl).setName("Header & Footer").setHeading();
+    // ── 7. Header ─────────────────────────────────────────────────────────────
+    new Setting(containerEl).setName("Header").setHeading();
+    new Setting(containerEl)
+      .setName("Show on first page")
+      .setDesc("When off, page 1 has no header, footer, or page number. Numbering begins on page 2 using the start value.")
+      .addToggle((t) =>
+        t.setValue(s.showHeaderFooterOnFirstPage).onChange((v) => {
+          s.showHeaderFooterOnFirstPage = v;
+          void this.markDirty();
+        }),
+      );
     new Setting(containerEl).setName("Show header").addToggle((t) =>
       t.setValue(s.showHeader).onChange((v) => { s.showHeader = v; void this.markDirty(); }),
     );
@@ -2414,27 +2654,48 @@ class PDFExportSettingTab extends PluginSettingTab {
       .setName("Header text")
       .setDesc("Appears on every page according to the chosen alignment.")
       .addText((t) => t.setValue(s.headerText).onChange((v) => { s.headerText = v; void this.markDirty(); }));
-    new Setting(containerEl).setName("Header alignment").addDropdown((d) =>
+    new Setting(containerEl).setName("Alignment").addDropdown((d) =>
       d.addOptions({ left: "Left", center: "Center", right: "Right" })
        .setValue(s.headerAlignment)
        .onChange((v) => { s.headerAlignment = v as "left"|"center"|"right"; void this.markDirty(); }),
     );
-    numberSetting("Header font size (px)", "headerFontSize", 1);
-    colorSetting("Header font color", "headerFontColor");
-    new Setting(containerEl).setName("Header border").setDesc("Show the separator line below the header.").addToggle((t) =>
+    numberSetting("Font size (px)", "headerFontSize", 1);
+    numberSetting("Height (px)", "headerHeight", 0, "Explicit band height. 0 = auto (follows font size).");
+    colorSetting("Font color", "headerFontColor");
+    new Setting(containerEl).setName("Border").setDesc("Separator line below the header.").addToggle((t) =>
       t.setValue(s.showHeaderBorder).onChange((v) => { s.showHeaderBorder = v; void this.markDirty(); }),
     );
+    new Setting(containerEl)
+      .setName("Image")
+      .setDesc("Vault-relative path or https:// URL. Fills the header band as a background banner; text renders on top. Leave blank to disable.")
+      .addText((t) =>
+        t.setPlaceholder("assets/header-banner.png").setValue(s.headerImagePath)
+         .onChange((v) => { s.headerImagePath = v; void this.markDirty(); }),
+      );
+    numberSetting("Image left/right margin (px)", "headerImageMargin", 0, "Insets the banner from the left and right page edges. 0 = edge-to-edge.");
+
+    // ── 8. Footer ─────────────────────────────────────────────────────────────
+    new Setting(containerEl).setName("Footer").setHeading();
     new Setting(containerEl).setName("Show footer").addToggle((t) =>
       t.setValue(s.showFooter).onChange((v) => { s.showFooter = v; void this.markDirty(); }),
     );
     new Setting(containerEl)
       .setName("Footer text")
       .addText((t) => t.setValue(s.footerText).onChange((v) => { s.footerText = v; void this.markDirty(); }));
-    numberSetting("Footer font size (px)", "footerFontSize", 1);
-    colorSetting("Footer font color", "footerFontColor");
-    new Setting(containerEl).setName("Footer border").setDesc("Show the separator line above the footer.").addToggle((t) =>
+    numberSetting("Font size (px)", "footerFontSize", 1);
+    numberSetting("Height (px)", "footerHeight", 0, "Explicit band height. 0 = auto (follows font size).");
+    colorSetting("Font color", "footerFontColor");
+    new Setting(containerEl).setName("Border").setDesc("Separator line above the footer.").addToggle((t) =>
       t.setValue(s.showFooterBorder).onChange((v) => { s.showFooterBorder = v; void this.markDirty(); }),
     );
+    new Setting(containerEl)
+      .setName("Image")
+      .setDesc("Vault-relative path or https:// URL. Fills the footer band as a background banner.")
+      .addText((t) =>
+        t.setPlaceholder("assets/footer-banner.png").setValue(s.footerImagePath)
+         .onChange((v) => { s.footerImagePath = v; void this.markDirty(); }),
+      );
+    numberSetting("Image left/right margin (px)", "footerImageMargin", 0, "Insets the banner from the left and right page edges.");
     new Setting(containerEl).setName("Show page numbers").addToggle((t) =>
       t.setValue(s.showPageNumbers).onChange((v) => { s.showPageNumbers = v; void this.markDirty(); }),
     );
@@ -2448,77 +2709,22 @@ class PDFExportSettingTab extends PluginSettingTab {
       .setDesc("Number assigned to the first visible page number. Accepts any integer.")
       .addText((t) =>
         t.setValue(String(s.pageNumberStart))
-         .onChange((v) => {
-           const n = parseInt(v, 10);
-           s.pageNumberStart = isNaN(n) ? 1 : n;
-           void this.markDirty();
-         }),
-      );
-    new Setting(containerEl)
-      .setName("Header/footer on first page")
-      .setDesc("When off, page 1 has no header, footer, or page number. Numbering begins on page 2 using the start value.")
-      .addToggle((t) =>
-        t.setValue(s.showHeaderFooterOnFirstPage).onChange((v) => {
-          s.showHeaderFooterOnFirstPage = v;
-          void this.markDirty();
-        }),
+         .onChange((v) => { s.pageNumberStart = parseInt(v, 10) || 1; void this.markDirty(); }),
       );
 
-    // ── Frame ─────────────────────────────────────────────────────────────────
-    new Setting(containerEl).setName("Frame").setHeading();
-    let frameColorSetting: Setting;
-    let frameThicknessSetting: Setting;
-    let frameMarginSetting: Setting;
-    let frameStyleSetting: Setting;
-    const toggleFrameSettingsVisibility = (visible: boolean) => {
-      [frameColorSetting, frameThicknessSetting, frameMarginSetting, frameStyleSetting].forEach((setting) =>
-        setting.settingEl.toggleClass("mpdf-is-hidden", !visible),
-      );
-    };
-    new Setting(containerEl)
-      .setName("Enable frame")
-      .setDesc("Draws a border around the outer edge of every page — the outermost decoration. The header, footer, and content all render inside it.")
-      .addToggle((t) =>
-        t.setValue(s.frameEnabled).onChange((v) => {
-          s.frameEnabled = v;
-          toggleFrameSettingsVisibility(v);
-          void this.markDirty();
-        }),
-      );
-    frameColorSetting = colorSetting("Frame color", "frameColor");
-    frameThicknessSetting = numberSetting("Frame thickness (px)", "frameThickness", 1);
-    frameMarginSetting = numberSetting(
-      "Frame margin (px)", "frameMargin", 0,
-      "Gap between the page edge and the frame, applied equally on all four sides.",
-    );
-    frameStyleSetting = new Setting(containerEl).setName("Frame style").addDropdown((d) =>
-      d.addOptions({ solid: "Solid", dashed: "Dashed", dotted: "Dotted", double: "Double", groove: "Groove", ridge: "Ridge" })
-       .setValue(s.frameStyle)
-       .onChange((v) => { s.frameStyle = v as PDFExportSettings["frameStyle"]; void this.markDirty(); }),
-    );
-    toggleFrameSettingsVisibility(s.frameEnabled);
-
-    // ── Behaviour ─────────────────────────────────────────────────────────────
+    // ── 9. Behaviour ──────────────────────────────────────────────────────────
     new Setting(containerEl).setName("Behaviour").setHeading();
     new Setting(containerEl)
       .setName("Hide frontmatter")
       .setDesc("Strip the YAML frontmatter block (--- … ---) from the preview and exported PDF.")
       .addToggle((t) =>
-        t.setValue(s.hideFrontmatter).onChange((v) => {
-          s.hideFrontmatter = v;
-          void this.markDirty();
-        }),
+        t.setValue(s.hideFrontmatter).onChange((v) => { s.hideFrontmatter = v; void this.markDirty(); }),
       );
     new Setting(containerEl)
       .setName("Include file name as title")
-      .setDesc(
-        "Prepend the note's file name as an H1 heading at the top of the PDF.",
-      )
+      .setDesc("Prepend the note's file name as an H1 heading at the top of the PDF.")
       .addToggle((t) =>
-        t.setValue(s.includeFilenameAsTitle).onChange((v) => {
-          s.includeFilenameAsTitle = v;
-          void this.markDirty();
-        }),
+        t.setValue(s.includeFilenameAsTitle).onChange((v) => { s.includeFilenameAsTitle = v; void this.markDirty(); }),
       );
     new Setting(containerEl)
       .setName("Underline links")
@@ -2531,6 +2737,18 @@ class PDFExportSettingTab extends PluginSettingTab {
     );
     new Setting(containerEl).setName("Auto page break before H2").addToggle((t) =>
       t.setValue(s.autoBreakH2).onChange((v) => { s.autoBreakH2 = v; void this.markDirty(); }),
+    );
+    new Setting(containerEl).setName("H1 bottom border").addToggle((t) =>
+      t.setValue(s.h1BorderBottom).onChange((v) => { s.h1BorderBottom = v; void this.markDirty(); }),
+    );
+    new Setting(containerEl).setName("H2 bottom border").addToggle((t) =>
+      t.setValue(s.h2BorderBottom).onChange((v) => { s.h2BorderBottom = v; void this.markDirty(); }),
+    );
+    new Setting(containerEl).setName("Center H1").addToggle((t) =>
+      t.setValue(s.centerH1).onChange((v) => { s.centerH1 = v; void this.markDirty(); }),
+    );
+    new Setting(containerEl).setName("Striped table rows").addToggle((t) =>
+      t.setValue(s.tableStriped).onChange((v) => { s.tableStriped = v; void this.markDirty(); }),
     );
   }
 }
