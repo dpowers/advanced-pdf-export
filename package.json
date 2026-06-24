@@ -1,6 +1,6 @@
 {
   "name": "obsidian-advanced-pdf-export",
-  "version": "3.9.0",
+  "version": "3.9.1",
   "description": "Obsidian plugin for advanced PDF export",
   "author": "ShrekBytes",
   "repository": {
@@ -15,7 +15,7 @@
   "devDependencies": {
     "@types/node": "^22.20.0",
     "esbuild": "0.25.5",
-    "obsidian": "^1.13.1",
+    "obsidian": "^1.11.1",
     "tslib": "^2.8.1",
     "typescript": "^5.8.3"
   }

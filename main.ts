@@ -104,7 +104,8 @@ interface PDFExportSettings extends DocStyle {
   showPageNumbers: boolean;
   pageNumberPosition: "center" | "left" | "right";
   pageNumberStart: number;
-  showHeaderFooterOnFirstPage: boolean;
+  showHeaderOnFirstPage: boolean;
+  showFooterOnFirstPage: boolean;
   headerAlignment: "left" | "center" | "right";
   headerFontSize: number;
   headerFontColor: string;
@@ -366,7 +367,8 @@ const DEFAULT_SETTINGS: PDFExportSettings = {
   showPageNumbers: true,
   pageNumberPosition: "right",
   pageNumberStart: 1,
-  showHeaderFooterOnFirstPage: true,
+  showHeaderOnFirstPage: true,
+  showFooterOnFirstPage: true,
   headerAlignment: "right",
   headerFontSize: 9,
   headerFontColor: "#999999",
@@ -1385,21 +1387,18 @@ function buildPageLayouts(allPages: HTMLElement[][], s: PDFExportSettings): Page
   const totalPages = allPages.length;
   return allPages.map((pageNodes, i) => {
     const pageNum = i + 1;
-    const showHF = s.showHeaderFooterOnFirstPage || i > 0;
+    const showHeader = s.showHeaderOnFirstPage || i > 0;
+    const showFooter = s.showFooterOnFirstPage || i > 0;
 
-    // Page number display: when first-page HF is disabled the offset shifts by 1.
-    const displayNum = s.showHeaderFooterOnFirstPage
-      ? s.pageNumberStart + i
-      : s.pageNumberStart + (i - 1);
-    const displayTotal = s.showHeaderFooterOnFirstPage
-      ? s.pageNumberStart + totalPages - 1
-      : s.pageNumberStart + totalPages - 2;
+    // Page-number offset: when footer is hidden on page 1 the numbering shifts by 1.
+    const displayNum   = s.showFooterOnFirstPage ? s.pageNumberStart + i       : s.pageNumberStart + (i - 1);
+    const displayTotal = s.showFooterOnFirstPage ? s.pageNumberStart + totalPages - 1 : s.pageNumberStart + totalPages - 2;
     const numStr = `${displayNum} / ${displayTotal}`;
 
     let footerLeft = "", footerRight = "", footerCenter = "";
     let headerLeft = "", headerCenter = "", headerRight = "";
 
-    if (showHF) {
+    if (showFooter) {
       if (s.showPageNumbers) {
         if (s.pageNumberPosition === "center") {
           footerCenter = (s.footerText ? s.footerText + " — " : "") + numStr;
@@ -1413,7 +1412,9 @@ function buildPageLayouts(allPages: HTMLElement[][], s: PDFExportSettings): Page
       } else {
         footerLeft = s.footerText ?? "";
       }
+    }
 
+    if (showHeader) {
       if (s.headerText) {
         if (s.headerAlignment === "center") {
           headerCenter = s.headerText;
@@ -2026,10 +2027,11 @@ class PDFExportModal extends Modal {
         }
       }
 
-      const pageShowsHF = s.showHeaderFooterOnFirstPage || layout.pageNum > 1;
+      const pageShowsHeader = s.showHeaderOnFirstPage || layout.pageNum > 1;
+      const pageShowsFooter = s.showFooterOnFirstPage || layout.pageNum > 1;
 
       // ── Header banner image (behind header text) ──────────────────────────────
-      if (pageShowsHF && s.showHeader && s.headerImagePath) {
+      if (pageShowsHeader && s.showHeader && s.headerImagePath) {
         const imgUrl = resolveImageUrl(this.app, s.headerImagePath);
         if (imgUrl) {
           const bannerEl = activeDocument.createElement("div");
@@ -2050,7 +2052,7 @@ class PDFExportModal extends Modal {
       }
 
       // ── Header text ──────────────────────────────────────────────────────────
-      const hasHeader = s.showHeader && pageShowsHF && (layout.headerLeft || layout.headerCenter || layout.headerRight || s.showHeaderBorder);
+      const hasHeader = s.showHeader && pageShowsHeader && (layout.headerLeft || layout.headerCenter || layout.headerRight || s.showHeaderBorder);
       if (hasHeader) {
         const hdr = activeDocument.createElement("div");
         hdr.setCssStyles({
@@ -2093,7 +2095,7 @@ class PDFExportModal extends Modal {
       });
 
       // ── Footer banner image (behind footer text) ──────────────────────────────
-      if (pageShowsHF && s.showFooter && s.footerImagePath) {
+      if (pageShowsFooter && s.showFooter && s.footerImagePath) {
         const imgUrl = resolveImageUrl(this.app, s.footerImagePath);
         if (imgUrl) {
           const bannerEl = activeDocument.createElement("div");
@@ -2114,7 +2116,7 @@ class PDFExportModal extends Modal {
       }
 
       // ── Footer text ───────────────────────────────────────────────────────────
-      const hasFooter = s.showFooter && pageShowsHF && (layout.footerLeft || layout.footerRight || layout.footerCenter || s.showFooterBorder);
+      const hasFooter = s.showFooter && pageShowsFooter && (layout.footerLeft || layout.footerRight || layout.footerCenter || s.showFooterBorder);
       if (hasFooter) {
         const footer = activeDocument.createElement("div");
         footer.setCssStyles({
@@ -2211,15 +2213,16 @@ class PDFExportModal extends Modal {
         return clone.outerHTML;
       }).join("\n");
 
-      const pageShowsHF = s.showHeaderFooterOnFirstPage || layout.pageNum > 1;
+      const pageShowsHeader = s.showHeaderOnFirstPage || layout.pageNum > 1;
+      const pageShowsFooter = s.showFooterOnFirstPage || layout.pageNum > 1;
 
-      const hasExportHeader = s.showHeader && pageShowsHF && (layout.headerLeft || layout.headerCenter || layout.headerRight || s.showHeaderBorder);
+      const hasExportHeader = s.showHeader && pageShowsHeader && (layout.headerLeft || layout.headerCenter || layout.headerRight || s.showHeaderBorder);
       const headerBorder = s.showHeaderBorder ? `border-bottom:0.5px solid ${exportAccent}33;` : "";
       const headerHTML = hasExportHeader
         ? `<div style="position:absolute;top:${mTop * 0.4}px;left:${mLeft}px;right:${mRight}px;display:flex;align-items:center;font-size:${s.headerFontSize}px;color:${s.headerFontColor};font-family:${fontFamily};white-space:nowrap;${headerBorder}">${buildHFInnerHTML(layout.headerCenter, layout.headerLeft, layout.headerRight)}</div>`
         : "";
 
-      const hasExportFooter = s.showFooter && pageShowsHF && (layout.footerLeft || layout.footerRight || layout.footerCenter || s.showFooterBorder);
+      const hasExportFooter = s.showFooter && pageShowsFooter && (layout.footerLeft || layout.footerRight || layout.footerCenter || s.showFooterBorder);
       const footerBorder = s.showFooterBorder ? `border-top:0.5px solid ${exportAccent}33;` : "";
       const footerHTML = hasExportFooter
         ? `<div style="position:absolute;bottom:0;left:0;right:0;height:${footerH}px;display:flex;align-items:center;${footerBorder}padding:0 ${mRight}px 0 ${mLeft}px;font-size:${s.footerFontSize}px;color:${s.footerFontColor};font-family:${fontFamily};">${buildHFInnerHTML(layout.footerCenter, layout.footerLeft, layout.footerRight)}</div>`
@@ -2228,10 +2231,10 @@ class PDFExportModal extends Modal {
       const contentDivHTML = `<div class="mpdf-doc"${isRTL ? ' dir="rtl"' : ''} style="position:absolute;top:${mTop + headerH}px;left:${mLeft}px;width:${contentW}px;">${contentHTML}</div>`;
 
       // Banner divs precede their text divs so DOM order puts text on top.
-      const headerBannerHTML = (pageShowsHF && resolvedHeaderBannerUrl)
+      const headerBannerHTML = (pageShowsHeader && resolvedHeaderBannerUrl)
         ? `<div style="position:absolute;top:${mTop * 0.4}px;left:${s.headerImageMargin}px;right:${s.headerImageMargin}px;height:${headerH}px;background-image:url('${resolvedHeaderBannerUrl}');background-size:cover;background-position:center;background-repeat:no-repeat;pointer-events:none;"></div>`
         : "";
-      const footerBannerHTML = (pageShowsHF && resolvedFooterBannerUrl)
+      const footerBannerHTML = (pageShowsFooter && resolvedFooterBannerUrl)
         ? `<div style="position:absolute;bottom:0;left:${s.footerImageMargin}px;right:${s.footerImageMargin}px;height:${footerH}px;background-image:url('${resolvedFooterBannerUrl}');background-size:cover;background-position:center;background-repeat:no-repeat;pointer-events:none;"></div>`
         : "";
 
@@ -2638,18 +2641,15 @@ class PDFExportSettingTab extends PluginSettingTab {
 
     // ── 7. Header ─────────────────────────────────────────────────────────────
     new Setting(containerEl).setName("Header").setHeading();
-    new Setting(containerEl)
-      .setName("Show on first page")
-      .setDesc("When off, page 1 has no header, footer, or page number. Numbering begins on page 2 using the start value.")
-      .addToggle((t) =>
-        t.setValue(s.showHeaderFooterOnFirstPage).onChange((v) => {
-          s.showHeaderFooterOnFirstPage = v;
-          void this.markDirty();
-        }),
-      );
     new Setting(containerEl).setName("Show header").addToggle((t) =>
       t.setValue(s.showHeader).onChange((v) => { s.showHeader = v; void this.markDirty(); }),
     );
+    new Setting(containerEl)
+      .setName("Show on first page")
+      .setDesc("When off, the header is hidden on page 1. Useful for title pages.")
+      .addToggle((t) =>
+        t.setValue(s.showHeaderOnFirstPage).onChange((v) => { s.showHeaderOnFirstPage = v; void this.markDirty(); }),
+      );
     new Setting(containerEl)
       .setName("Header text")
       .setDesc("Appears on every page according to the chosen alignment.")
@@ -2679,6 +2679,12 @@ class PDFExportSettingTab extends PluginSettingTab {
     new Setting(containerEl).setName("Show footer").addToggle((t) =>
       t.setValue(s.showFooter).onChange((v) => { s.showFooter = v; void this.markDirty(); }),
     );
+    new Setting(containerEl)
+      .setName("Show on first page")
+      .setDesc("When off, the footer and page numbers are hidden on page 1. Page numbering starts from page 2.")
+      .addToggle((t) =>
+        t.setValue(s.showFooterOnFirstPage).onChange((v) => { s.showFooterOnFirstPage = v; void this.markDirty(); }),
+      );
     new Setting(containerEl)
       .setName("Footer text")
       .addText((t) => t.setValue(s.footerText).onChange((v) => { s.footerText = v; void this.markDirty(); }));
