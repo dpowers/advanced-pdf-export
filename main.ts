@@ -2455,7 +2455,7 @@ class PDFExportSettingTab extends PluginSettingTab {
     // ── 3. Margin & Frame ─────────────────────────────────────────────────────
     new Setting(containerEl).setName("Margin & Frame").setHeading();
     new Setting(containerEl)
-      .setName("Margins (mm)")
+      .setName("Margins")
       .setDesc("Top · Bottom · Left · Right")
       .addText((t) =>
         t.setPlaceholder("Top").setValue(String(s.marginTop))
@@ -2484,7 +2484,7 @@ class PDFExportSettingTab extends PluginSettingTab {
     };
     new Setting(containerEl)
       .setName("Enable frame")
-      .setDesc("Draws a border around the outer edge of every page. Header, footer, and content all render inside it.")
+      .setDesc("Draws a border around the outer edge of every page.")
       .addToggle((t) =>
         t.setValue(s.frameEnabled).onChange((v) => {
           s.frameEnabled = v;
@@ -2652,7 +2652,6 @@ class PDFExportSettingTab extends PluginSettingTab {
       );
     new Setting(containerEl)
       .setName("Header text")
-      .setDesc("Appears on every page according to the chosen alignment.")
       .addText((t) => t.setValue(s.headerText).onChange((v) => { s.headerText = v; void this.markDirty(); }));
     new Setting(containerEl).setName("Alignment").addDropdown((d) =>
       d.addOptions({ left: "Left", center: "Center", right: "Right" })
@@ -2660,19 +2659,19 @@ class PDFExportSettingTab extends PluginSettingTab {
        .onChange((v) => { s.headerAlignment = v as "left"|"center"|"right"; void this.markDirty(); }),
     );
     numberSetting("Font size (px)", "headerFontSize", 1);
-    numberSetting("Height (px)", "headerHeight", 0, "Explicit band height. 0 = auto (follows font size).");
+    numberSetting("Height (px)", "headerHeight", 0, "Explicit band height (0 = auto).");
     colorSetting("Font color", "headerFontColor");
     new Setting(containerEl).setName("Border").setDesc("Separator line below the header.").addToggle((t) =>
       t.setValue(s.showHeaderBorder).onChange((v) => { s.showHeaderBorder = v; void this.markDirty(); }),
     );
     new Setting(containerEl)
       .setName("Image")
-      .setDesc("Vault-relative path or https:// URL. Fills the header band as a background banner; text renders on top. Leave blank to disable.")
+      .setDesc("Vault-relative path or https:// URL. Fills the header band as a background banner.")
       .addText((t) =>
         t.setPlaceholder("assets/header-banner.png").setValue(s.headerImagePath)
          .onChange((v) => { s.headerImagePath = v; void this.markDirty(); }),
       );
-    numberSetting("Image left/right margin (px)", "headerImageMargin", 0, "Insets the banner from the left and right page edges. 0 = edge-to-edge.");
+    numberSetting("Image left/right margin (px)", "headerImageMargin", 0, "Insets the banner from the left and right page edges.");
 
     // ── 8. Footer ─────────────────────────────────────────────────────────────
     new Setting(containerEl).setName("Footer").setHeading();
@@ -2689,7 +2688,7 @@ class PDFExportSettingTab extends PluginSettingTab {
       .setName("Footer text")
       .addText((t) => t.setValue(s.footerText).onChange((v) => { s.footerText = v; void this.markDirty(); }));
     numberSetting("Font size (px)", "footerFontSize", 1);
-    numberSetting("Height (px)", "footerHeight", 0, "Explicit band height. 0 = auto (follows font size).");
+    numberSetting("Height (px)", "footerHeight", 0, "Explicit band height (0 = auto).");
     colorSetting("Font color", "footerFontColor");
     new Setting(containerEl).setName("Border").setDesc("Separator line above the footer.").addToggle((t) =>
       t.setValue(s.showFooterBorder).onChange((v) => { s.showFooterBorder = v; void this.markDirty(); }),
@@ -2712,7 +2711,7 @@ class PDFExportSettingTab extends PluginSettingTab {
     );
     new Setting(containerEl)
       .setName("Page number start")
-      .setDesc("Number assigned to the first visible page number. Accepts any integer.")
+      .setDesc("Number assigned to the first visible page number.")
       .addText((t) =>
         t.setValue(String(s.pageNumberStart))
          .onChange((v) => { s.pageNumberStart = parseInt(v, 10) || 1; void this.markDirty(); }),
@@ -2734,7 +2733,7 @@ class PDFExportSettingTab extends PluginSettingTab {
       );
     new Setting(containerEl)
       .setName("Underline links")
-      .setDesc("Applies to both internal (in-document) and external links.")
+      .setDesc("Applies to both internal and external links.")
       .addToggle((t) =>
         t.setValue(s.linkUnderline).onChange((v) => { s.linkUnderline = v; void this.markDirty(); }),
       );
