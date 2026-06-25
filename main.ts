@@ -2,6 +2,7 @@ import {
   App, Component, MarkdownRenderer, MarkdownView, Menu, Modal, Notice,
   Plugin, PluginSettingTab, Setting, TFile, setIcon,
 } from "obsidian";
+import { PDFArray, PDFDict, PDFDocument, PDFHexString, PDFName, PDFNull, PDFNumber } from "pdf-lib";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -84,6 +85,13 @@ interface ElectronBridge {
   require(module: string): unknown;
 }
 
+/** One entry in the PDF outline/bookmark tree, extracted from the heading nodes. */
+interface OutlineEntry {
+  title: string;
+  level: number; // 1–6 matching H1–H6
+  page:  number; // 1-indexed page number in the exported PDF
+}
+
 interface AppWithSettings {
   setting?: {
     open?: () => void;
@@ -154,6 +162,8 @@ interface PDFExportSettings extends DocStyle {
   backgroundImageScope: "full-page" | "content-only";
   /** 0–1 opacity for the background image layer. */
   backgroundImageOpacity: number;
+  /** When true, headings H1–H6 are embedded as a bookmark tree in the exported PDF. */
+  includeOutline: boolean;
 }
 
 // Cached layout — holds everything drawPreview and exportPDF need so that
@@ -404,6 +414,8 @@ const DEFAULT_SETTINGS: PDFExportSettings = {
   backgroundImageSize: "cover",
   backgroundImageScope: "full-page",
   backgroundImageOpacity: 1,
+  // Outline / bookmarks
+  includeOutline: true,
 };
 
 // ─── Utilities ────────────────────────────────────────────────────────────────
@@ -1432,6 +1444,138 @@ function buildPageLayouts(allPages: HTMLElement[][], s: PDFExportSettings): Page
   });
 }
 
+// ─── PDF outline (bookmarks) ──────────────────────────────────────────────────
+// Electron's printToPDF does not generate bookmarks — we post-process the raw
+// PDF bytes with pdf-lib to inject a hierarchical outline derived from the
+// heading elements already present in the paginated layout.
+
+/**
+ * Walks every page's node list and collects heading elements in document order.
+ * Headings can sit at the top level of pageNodes (the common case) or be nested
+ * inside a container fragment produced by the page-splitter.
+ */
+function extractOutlineEntries(layouts: PageLayout[]): OutlineEntry[] {
+  const entries: OutlineEntry[] = [];
+  for (const layout of layouts) {
+    for (const node of layout.pageNodes) {
+      const topLevel: HTMLElement[] = /^H[1-6]$/.test(node.tagName) ? [node] : [];
+      const nested = Array.from(node.querySelectorAll<HTMLElement>("h1,h2,h3,h4,h5,h6"));
+      for (const el of [...topLevel, ...nested]) {
+        const level = parseInt(el.tagName[1], 10);
+        const title = (el.textContent ?? "").trim();
+        if (title) entries.push({ title, level, page: layout.pageNum });
+      }
+    }
+  }
+  return entries;
+}
+
+/**
+ * Post-processes a PDF buffer produced by `printToPDF` and injects a
+ * hierarchical bookmark outline built from the supplied entries.
+ *
+ * Heading nesting (H1 → H2 → H3 …) is preserved. Each item links to its page
+ * via an XYZ destination that inherits the reader's current zoom. Sub-trees are
+ * collapsed by default (negative /Count per PDF spec). PageMode is set to
+ * UseOutlines so readers open the bookmarks panel on load.
+ */
+async function injectPDFOutline(pdfBuffer: Buffer, entries: OutlineEntry[]): Promise<Buffer> {
+  if (!entries.length) return pdfBuffer;
+
+  const pdfDoc = await PDFDocument.load(pdfBuffer);
+  const pages  = pdfDoc.getPages();
+  const ctx    = pdfDoc.context;
+  const n      = entries.length;
+
+  // ── Compute tree relationships ───────────────────────────────────────────
+  // parentIdx[i] = index of the nearest ancestor entry with a lower heading
+  // level, or -1 when the entry sits at the root of the outline.
+  const parentIdx  = new Array<number>(n).fill(-1);
+  for (let i = 1; i < n; i++) {
+    for (let j = i - 1; j >= 0; j--) {
+      if (entries[j].level < entries[i].level) { parentIdx[i] = j; break; }
+    }
+  }
+
+  // Sibling linkage (prev / next among entries that share the same parent).
+  const prevSib    = new Array<number>(n).fill(-1);
+  const nextSib    = new Array<number>(n).fill(-1);
+  for (let i = 0; i < n; i++) {
+    for (let j = i - 1; j >= 0; j--) {
+      if (parentIdx[j] === parentIdx[i]) { prevSib[i] = j; break; }
+    }
+    for (let j = i + 1; j < n; j++) {
+      if (parentIdx[j] === parentIdx[i]) { nextSib[i] = j; break; }
+    }
+  }
+
+  // First / last direct child of each entry.
+  const firstChild = new Array<number>(n).fill(-1);
+  const lastChild  = new Array<number>(n).fill(-1);
+  for (let i = 0; i < n; i++) {
+    const p = parentIdx[i];
+    if (p >= 0) {
+      if (firstChild[p] < 0) firstChild[p] = i;
+      lastChild[p] = i;
+    }
+  }
+
+  // ── Allocate PDF indirect references ─────────────────────────────────────
+  const outlineRef = ctx.nextRef();
+  const itemRefs   = entries.map(() => ctx.nextRef());
+
+  // ── Build each outline item object ───────────────────────────────────────
+  for (let i = 0; i < n; i++) {
+    const pageIdx = Math.min(entries[i].page - 1, pages.length - 1);
+
+    // XYZ destination: navigate to this page, null left/top inherits scroll, 0 zoom inherits zoom.
+    const dest = PDFArray.withContext(ctx);
+    dest.push(pages[pageIdx].ref);
+    dest.push(PDFName.of("XYZ"));
+    dest.push(PDFNull);
+    dest.push(PDFNull);
+    dest.push(PDFNumber.of(0));
+
+    const itemDict = PDFDict.withContext(ctx);
+    itemDict.set(PDFName.of("Title"),  PDFHexString.fromText(entries[i].title)); // UTF-16 → full Unicode
+    itemDict.set(PDFName.of("Parent"), parentIdx[i] >= 0 ? itemRefs[parentIdx[i]] : outlineRef);
+    itemDict.set(PDFName.of("Dest"),   dest);
+    if (prevSib[i]    >= 0) itemDict.set(PDFName.of("Prev"),  itemRefs[prevSib[i]]);
+    if (nextSib[i]    >= 0) itemDict.set(PDFName.of("Next"),  itemRefs[nextSib[i]]);
+    if (firstChild[i] >= 0) {
+      itemDict.set(PDFName.of("First"), itemRefs[firstChild[i]]);
+      itemDict.set(PDFName.of("Last"),  itemRefs[lastChild[i]]);
+      // Negative /Count = subtree is collapsed by default in the PDF reader.
+      let childCount = 0;
+      for (let j = 0; j < n; j++) if (parentIdx[j] === i) childCount++;
+      itemDict.set(PDFName.of("Count"), PDFNumber.of(-childCount));
+    }
+    ctx.assign(itemRefs[i], itemDict);
+  }
+
+  // ── Build the outline root dictionary ────────────────────────────────────
+  let rootFirst = -1, rootLast = -1, rootCount = 0;
+  for (let i = 0; i < n; i++) {
+    if (parentIdx[i] < 0) {
+      if (rootFirst < 0) rootFirst = i;
+      rootLast = i;
+      rootCount++;
+    }
+  }
+  const rootDict = PDFDict.withContext(ctx);
+  rootDict.set(PDFName.of("Type"),  PDFName.of("Outlines"));
+  rootDict.set(PDFName.of("First"), itemRefs[rootFirst]);
+  rootDict.set(PDFName.of("Last"),  itemRefs[rootLast]);
+  rootDict.set(PDFName.of("Count"), PDFNumber.of(rootCount));
+  ctx.assign(outlineRef, rootDict);
+
+  // ── Wire into the document catalog ───────────────────────────────────────
+  pdfDoc.catalog.set(PDFName.of("Outlines"), outlineRef);
+  pdfDoc.catalog.set(PDFName.of("PageMode"), PDFName.of("UseOutlines"));
+
+  return Buffer.from(await pdfDoc.save());
+}
+
 // ─── Header / footer / frame rendering helpers ───────────────────────────────
 
 /** Shorthand `border` value for the page frame, shared by the preview and export paths. */
@@ -2321,7 +2465,15 @@ ${pageHTMLParts.join("\n")}
             printBackground:   true,
             margins:           { marginType: "none" },
           })
-          .then((data: Buffer) => {
+          .then(async (data: Buffer) => {
+            // printToPDF produces a flat PDF with no outline; inject one via pdf-lib.
+            if (s.includeOutline) {
+              try {
+                data = await injectPDFOutline(data, extractOutlineEntries(layouts));
+              } catch (outlineErr) {
+                console.warn("[advanced-pdf-export] outline injection failed:", outlineErr);
+              }
+            }
             electron.require("fs").writeFile(res.filePath!, data, (err: Error | null) => {
               if (err) new Notice("Error saving PDF: " + err.message);
               else     new Notice("✓ PDF saved: " + res.filePath);
@@ -2762,5 +2914,14 @@ class PDFExportSettingTab extends PluginSettingTab {
     new Setting(containerEl).setName("Striped table rows").addToggle((t) =>
       t.setValue(s.tableStriped).onChange((v) => { s.tableStriped = v; void this.markDirty(); }),
     );
+    new Setting(containerEl)
+      .setName("Include PDF outline (bookmarks)")
+      .setDesc(
+        "Embeds a bookmark tree built from headings H1–H6 into the exported PDF. " +
+        "Most PDF readers display it in a side panel for quick navigation.",
+      )
+      .addToggle((t) =>
+        t.setValue(s.includeOutline).onChange((v) => { s.includeOutline = v; void this.markDirty(); }),
+      );
   }
 }
