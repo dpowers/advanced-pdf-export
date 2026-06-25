@@ -2917,7 +2917,7 @@ class PDFExportSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName("Include PDF outline (bookmarks)")
       .setDesc(
-        "Embeds a bookmark tree built from headings H1–H6 into the exported PDF. " +
+        "Embeds a bookmark tree into the exported PDF. " +
         "Most PDF readers display it in a side panel for quick navigation.",
       )
       .addToggle((t) =>
