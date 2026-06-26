@@ -51,6 +51,7 @@ interface ElectronBrowserWindow {
   webContents: {
     once(event: "did-fail-load", listener: (event: unknown, code: number, desc: string) => void): void;
     once(event: "did-finish-load", listener: () => void): void;
+    executeJavaScript(code: string): Promise<unknown>;
     printToPDF(options: {
       pageSize: string;
       landscape: boolean;
@@ -509,6 +510,12 @@ async function renderMarkdownToEl(
   try {
     await MarkdownRenderer.render(app, markdown, temp, sourcePath, component);
     await waitForMermaidDiagrams(temp);
+    // Wait for MathJax's lazily-loaded @font-face files to arrive before we
+    // clone nodes; glyphs in unloaded font ranges render as invisible characters.
+    const docFonts = (activeDocument as Document & { fonts?: { ready?: Promise<unknown> } }).fonts;
+    if (docFonts?.ready) {
+      try { await docFonts.ready; } catch { /* non-critical */ }
+    }
   } finally {
     activeDocument.body.removeChild(temp);
   }
@@ -977,6 +984,63 @@ function getMathJaxCSS(): string {
   return Array.from(
     activeDocument.head.querySelectorAll<HTMLStyleElement>("style[id^='MJX-']"),
   ).map((el) => el.textContent ?? "").join("\n");
+}
+
+/** Strips @font-face rules from CSS before injecting into shadow-DOM adoptedStyleSheets.
+ *  Some Electron builds silently fail to load fonts declared there; MathJax's own
+ *  document-head @font-face rules remain accessible to shadow-DOM content per spec. */
+function stripAtFontFaces(css: string): string {
+  return css.replace(/@font-face\s*\{[^{}]*(?:\{[^{}]*\}[^{}]*)?\}/g, "");
+}
+
+/** Returns MathJax CSS with all font url() references replaced by base64 data URIs.
+ *  The export BrowserWindow (loaded from a blob: URL) cannot resolve app:// font
+ *  paths; inlining makes math characters visible. Falls back to the original URL
+ *  on fetch error. */
+async function getMathJaxCSSInlined(): Promise<string> {
+  const css = getMathJaxCSS();
+  if (!css) return "";
+
+  const urlRe = /url\(\s*["']?([^"')]+)["']?\s*\)/g;
+  const urlSet = new Set<string>();
+  let m: RegExpExecArray | null;
+  while ((m = urlRe.exec(css)) !== null) {
+    const u = m[1].trim();
+    if (!u.startsWith("data:")) urlSet.add(u);
+  }
+
+  if (!urlSet.size) return css;
+
+  const toDataUri = async (url: string): Promise<string> => {
+    try {
+      const res = await fetch(url);
+      if (!res.ok) return url;
+      const buf   = await res.arrayBuffer();
+      const bytes = new Uint8Array(buf);
+      let bin = "";
+      for (let i = 0; i < bytes.length; i += 8192) // chunk to avoid stack overflow
+        bin += String.fromCharCode(...bytes.subarray(i, Math.min(i + 8192, bytes.length)));
+      const b64  = btoa(bin);
+      const low  = url.toLowerCase();
+      const mime = low.includes("woff2") ? "font/woff2"
+                 : low.includes("woff")  ? "font/woff"
+                 : low.includes(".ttf")  ? "font/ttf"
+                 : "font/otf";
+      return `data:${mime};base64,${b64}`;
+    } catch {
+      return url;
+    }
+  };
+
+  const entries = await Promise.all(
+    Array.from(urlSet).map(async (url) => [url, await toDataUri(url)] as const),
+  );
+  const resolved = new Map(entries);
+
+  return css.replace(/url\(\s*["']?([^"')]+)["']?\s*\)/g, (match, raw: string) => {
+    const data = resolved.get(raw.trim());
+    return data && data !== raw.trim() ? `url('${data}')` : match;
+  });
 }
 
 // ─── Paginator ────────────────────────────────────────────────────────────────
@@ -2055,9 +2119,12 @@ class PDFExportModal extends Modal {
 
     if (token !== this.renderToken) return;
 
-    // Forward MathJax styles so math renders correctly in shadow DOMs and export HTML.
-    const mathCSS = getMathJaxCSS();
-    const fullCSS = mathCSS ? `${mathCSS}\n${docCSS}` : docCSS;
+    // Strip @font-face before adding MathJax CSS to adoptedStyleSheets — document.head
+    // fonts are accessible to shadow DOM per spec, and some Electron builds silently
+    // fail to load fonts declared inside an adopted CSSStyleSheet.
+    const rawMathCSS    = getMathJaxCSS();
+    const shadowMathCSS = rawMathCSS ? stripAtFontFaces(rawMathCSS) : "";
+    const fullCSS = shadowMathCSS ? `${shadowMathCSS}\n${docCSS}` : docCSS;
 
     const allPages: HTMLElement[][] = [];
     for (const sectionEl of sectionEls) {
@@ -2387,8 +2454,12 @@ class PDFExportModal extends Modal {
       return `<div class="mpdf-export-page">${bgImgHTML}${headerBannerHTML}${headerHTML}${contentDivHTML}${footerBannerHTML}${footerHTML}${frameHTML}</div>`;
     });
 
+    // Inline MathJax fonts as base64 data URIs — the export BrowserWindow's blob:
+    // origin cannot resolve the app:// font paths MathJax normally references.
+    const inlinedMathCSS = await getMathJaxCSSInlined();
+
     const printCSS = `
-      *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+      *, *::before, *::after { box-sizing: border-box; }
       @page { size: ${pw}px ${ph}px; margin: 0; }
       html, body { margin: 0; padding: 0; background: ${pageBackground}; }
       .mpdf-export-page {
@@ -2407,6 +2478,7 @@ class PDFExportModal extends Modal {
 <head>
 <meta charset="UTF-8">
 <title>${escapeHTML(this.currentFile?.basename ?? "Export")}</title>
+${inlinedMathCSS ? `<style>${escapeCSSForStyle(inlinedMathCSS)}</style>` : ""}
 <style>${escapeCSSForStyle(printCSS)}</style>
 </head>
 <body>
@@ -2454,16 +2526,22 @@ ${pageHTMLParts.join("\n")}
         if (exportHandled) return;
         exportHandled = true;
 
-        // Custom sizes embed @page dimensions in the HTML; preferCSSPageSize lets
-        // Electron honour that rule. Named sizes pass the size string directly.
-        const isCustom = s.pageSize === "Custom";
+        // Ensure all @font-face fonts (including inlined MathJax fonts) are loaded
+        // before capturing the PDF so math characters are not invisible.
         win.webContents
-          .printToPDF({
-            pageSize:          isCustom ? "A4" : s.pageSize,
-            landscape:         !isCustom && s.orientation === "landscape",
-            preferCSSPageSize: isCustom,
-            printBackground:   true,
-            margins:           { marginType: "none" },
+          .executeJavaScript("document.fonts.ready.then(() => true)")
+          .catch(() => true)
+          .then(() => {
+            // Custom sizes embed @page dimensions in the HTML; preferCSSPageSize lets
+            // Electron honour that rule. Named sizes pass the size string directly.
+            const isCustom = s.pageSize === "Custom";
+            return win.webContents.printToPDF({
+              pageSize:          isCustom ? "A4" : s.pageSize,
+              landscape:         !isCustom && s.orientation === "landscape",
+              preferCSSPageSize: isCustom,
+              printBackground:   true,
+              margins:           { marginType: "none" },
+            });
           })
           .then(async (data: Buffer) => {
             // printToPDF produces a flat PDF with no outline; inject one via pdf-lib.
