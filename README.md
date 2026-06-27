@@ -46,13 +46,15 @@ Type `///` on its own line, or click **Insert Page Break** in the toolbar.
 ### Style Presets
 ![Preset dropdown](screenshots/style1.png)
 
-![Academic preset](screenshots/style2.png)
+<p align="center">
+  <img src="screenshots/style2.png" alt="Academic preset" width="49%">
+  <img src="screenshots/style3.png" alt="Style 3" width="49%">
+</p>
 
-![](screenshots/style3.png)
-
-![](screenshots/style4.png)
-
-![](screenshots/style5.png)
+<p align="center">
+  <img src="screenshots/style4.png" alt="Style 4" width="49%">
+  <img src="screenshots/style5.png" alt="Style 5" width="49%">
+</p>
 
 
 ## Installation
