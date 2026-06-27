@@ -191,6 +191,10 @@ interface PageLayout {
   pageNodes: HTMLElement[];
   pageNum: number;
   totalPages: number;
+  pageShowsHeader: boolean;
+  pageShowsFooter: boolean;
+  hasHeader: boolean;
+  hasFooter: boolean;
   headerLeft: string;
   headerCenter: string;
   headerRight: string;
@@ -398,7 +402,7 @@ const DEFAULT_SETTINGS: PDFExportSettings = {
   autoBreakH1: false,
   autoBreakH2: false,
   includeFilenameAsTitle: false,
-  previewScale: 0.90,
+  previewScale: 0.9,
   customPageWidth: 210,   // A4 width in mm
   customPageHeight: 297,  // A4 height in mm
   // Band sizing (0 = auto from font size)
@@ -444,7 +448,8 @@ function escapeHTML(s: string): string {
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 // Escapes `</style` in CSS text to prevent the HTML parser from ending the
@@ -463,7 +468,18 @@ function resolveImageUrl(app: App, imagePath: string): string {
   if (direct instanceof TFile) return app.vault.getResourcePath(direct);
   const resolved = app.metadataCache.getFirstLinkpathDest(trimmed, "");
   if (resolved instanceof TFile) return app.vault.getResourcePath(resolved);
+  console.warn("[advanced-pdf-export] Could not resolve image path:", trimmed);
   return trimmed;
+}
+
+/** Maps a `backgroundImageSize` setting value to its CSS `background-size`
+ *  and `background-repeat` values. Centralises logic that would otherwise be
+ *  duplicated across the preview and export render paths. */
+function bgImageCssProps(size: PDFExportSettings["backgroundImageSize"]): { size: string; repeat: string } {
+  return {
+    size:   size === "fill" ? "100% 100%" : size === "tile" ? "auto" : size, // "cover" | "contain" pass through
+    repeat: size === "tile" ? "repeat" : "no-repeat",
+  };
 }
 
 /** True when RTL script chars (Arabic, Hebrew, etc.) exceed 10 % of all
@@ -478,9 +494,9 @@ function isRTLContent(text: string): boolean {
 
 // ─── Markdown helpers ─────────────────────────────────────────────────────────
 
-/** Normalises line endings to LF so the rest of the pipeline never sees CRLF. */
+/** Normalises line endings to LF so the rest of the pipeline never sees CRLF or CR. */
 function normalizeMarkdown(raw: string): string {
-  return raw.replace(/\r\n/g, "\n");
+  return raw.replace(/\r\n|\r/g, "\n");
 }
 
 /** Strips an opening YAML frontmatter block (--- … ---). Input must be LF-normalised. */
@@ -523,13 +539,19 @@ async function renderMarkdownToEl(
   return temp;
 }
 
+// Pre-compiled once — .replace() does not maintain lastIndex so g-flagged
+// module-level constants are safe here.
+const SLUG_STRIP = /[^\p{L}\p{N}\s-]/gu;
+const SLUG_SPACE = /\s+/g;
+const SLUG_DASH  = /-+/g;
+
 function slugifyHeading(text: string): string {
   return text
     .toLowerCase()
-    .replace(/[^\p{L}\p{N}\s-]/gu, "")
+    .replace(SLUG_STRIP, "")
     .trim()
-    .replace(/\s+/g, "-")
-    .replace(/-+/g, "-");
+    .replace(SLUG_SPACE, "-")
+    .replace(SLUG_DASH,  "-");
 }
 
 // Strips Obsidian-specific artefacts from rendered HTML so the output is
@@ -862,6 +884,8 @@ function buildDocCSS(s: PDFExportSettings, isRTL = false): string {
   }
   .mpdf-doc img { max-width: 100%; height: auto; display: block; margin: ${s.paragraphSpacing}em auto; }
   .mpdf-doc a { color: ${s.accentColor}; ${s.linkUnderline ? "" : "text-decoration: none;"} }
+  /* postProcessRenderedHTML removes the external-link class, but some themes
+     re-inject it at render time. This rule is cheap defense-in-depth. */
   .mpdf-doc a.external-link::after { display: none !important; content: none !important; }
   /* Hide copy-code buttons that survive postProcessRenderedHTML (e.g. re-injected by themes). */
   .mpdf-doc .copy-code-button { display: none !important; }
@@ -1001,12 +1025,10 @@ async function getMathJaxCSSInlined(): Promise<string> {
   const css = getMathJaxCSS();
   if (!css) return "";
 
-  const urlRe = /url\(\s*["']?([^"')]+)["']?\s*\)/g;
   const urlSet = new Set<string>();
-  let m: RegExpExecArray | null;
-  while ((m = urlRe.exec(css)) !== null) {
-    const u = m[1].trim();
-    if (!u.startsWith("data:")) urlSet.add(u);
+  for (const [, u] of css.matchAll(CSS_URL_RE)) {
+    const trimmedU = u.trim();
+    if (!trimmedU.startsWith("data:")) urlSet.add(trimmedU);
   }
 
   if (!urlSet.size) return css;
@@ -1037,11 +1059,18 @@ async function getMathJaxCSSInlined(): Promise<string> {
   );
   const resolved = new Map(entries);
 
-  return css.replace(/url\(\s*["']?([^"')]+)["']?\s*\)/g, (match, raw: string) => {
+  return css.replace(CSS_URL_RE, (match, raw: string) => {
     const data = resolved.get(raw.trim());
     return data && data !== raw.trim() ? `url('${data}')` : match;
   });
 }
+
+// Matches url(...) references in CSS. Used by getMathJaxCSSInlined to collect
+// Matches url(...) references in CSS. Used by getMathJaxCSSInlined to collect
+// and then replace font URLs with base64 data URIs.
+// Safe to share as a module-level constant: .replace() and matchAll() both
+// start a fresh scan regardless of the regex's lastIndex state.
+const CSS_URL_RE = /url\(\s*["']?([^"')]+)["']?\s*\)/g;
 
 // ─── Paginator ────────────────────────────────────────────────────────────────
 // Distributes rendered block children into page-height buckets. Oversized
@@ -1465,8 +1494,8 @@ function buildPageLayouts(allPages: HTMLElement[][], s: PDFExportSettings): Page
   const totalPages = allPages.length;
   return allPages.map((pageNodes, i) => {
     const pageNum = i + 1;
-    const showHeader = s.showHeaderOnFirstPage || i > 0;
-    const showFooter = s.showFooterOnFirstPage || i > 0;
+    const pageShowsHeader = s.showHeaderOnFirstPage || i > 0;
+    const pageShowsFooter = s.showFooterOnFirstPage || i > 0;
 
     // Page-number offset: when footer is hidden on page 1 the numbering shifts by 1.
     const displayNum   = s.showFooterOnFirstPage ? s.pageNumberStart + i       : s.pageNumberStart + (i - 1);
@@ -1476,7 +1505,7 @@ function buildPageLayouts(allPages: HTMLElement[][], s: PDFExportSettings): Page
     let footerLeft = "", footerRight = "", footerCenter = "";
     let headerLeft = "", headerCenter = "", headerRight = "";
 
-    if (showFooter) {
+    if (pageShowsFooter) {
       // Place footer text in its alignment zone.
       if (s.footerText) {
         if      (s.footerTextAlignment === "center") footerCenter = s.footerText;
@@ -1492,7 +1521,7 @@ function buildPageLayouts(allPages: HTMLElement[][], s: PDFExportSettings): Page
       }
     }
 
-    if (showHeader) {
+    if (pageShowsHeader) {
       if (s.headerText) {
         if (s.headerAlignment === "center") {
           headerCenter = s.headerText;
@@ -1504,7 +1533,12 @@ function buildPageLayouts(allPages: HTMLElement[][], s: PDFExportSettings): Page
       }
     }
 
-    return { pageNodes, pageNum, totalPages, headerLeft, headerCenter, headerRight, footerLeft, footerRight, footerCenter };
+    // Compute once here so both preview and export paths can read directly from
+    // the layout object instead of re-deriving the same boolean expressions.
+    const hasHeader = s.showHeader && pageShowsHeader && !!(headerLeft || headerCenter || headerRight || s.showHeaderBorder);
+    const hasFooter = s.showFooter && pageShowsFooter && !!(footerLeft || footerRight || footerCenter || s.showFooterBorder);
+
+    return { pageNodes, pageNum, totalPages, pageShowsHeader, pageShowsFooter, hasHeader, hasFooter, headerLeft, headerCenter, headerRight, footerLeft, footerRight, footerCenter };
   });
 }
 
@@ -1573,14 +1607,18 @@ async function injectPDFOutline(pdfBuffer: Buffer, entries: OutlineEntry[]): Pro
     }
   }
 
-  // First / last direct child of each entry.
-  const firstChild = new Array<number>(n).fill(-1);
-  const lastChild  = new Array<number>(n).fill(-1);
+  // First / last direct child of each entry, and direct child count.
+  // directChildCount is computed here in O(n) so the item-building loop
+  // below doesn't need an inner scan (which would be O(n²) overall).
+  const firstChild       = new Array<number>(n).fill(-1);
+  const lastChild        = new Array<number>(n).fill(-1);
+  const directChildCount = new Array<number>(n).fill(0);
   for (let i = 0; i < n; i++) {
     const p = parentIdx[i];
     if (p >= 0) {
       if (firstChild[p] < 0) firstChild[p] = i;
       lastChild[p] = i;
+      directChildCount[p]++;
     }
   }
 
@@ -1610,9 +1648,7 @@ async function injectPDFOutline(pdfBuffer: Buffer, entries: OutlineEntry[]): Pro
       itemDict.set(PDFName.of("First"), itemRefs[firstChild[i]]);
       itemDict.set(PDFName.of("Last"),  itemRefs[lastChild[i]]);
       // Negative /Count = subtree is collapsed by default in the PDF reader.
-      let childCount = 0;
-      for (let j = 0; j < n; j++) if (parentIdx[j] === i) childCount++;
-      itemDict.set(PDFName.of("Count"), PDFNumber.of(-childCount));
+      itemDict.set(PDFName.of("Count"), PDFNumber.of(-directChildCount[i]));
     }
     ctx.assign(itemRefs[i], itemDict);
   }
@@ -1626,6 +1662,11 @@ async function injectPDFOutline(pdfBuffer: Buffer, entries: OutlineEntry[]): Pro
       rootCount++;
     }
   }
+  // Safety: if every entry has a parent (e.g. the document starts with H2 and
+  // never has an H1), there are no root-level items. Injecting an empty or
+  // half-wired outline dict would produce a malformed PDF — bail out instead.
+  if (rootFirst < 0) return pdfBuffer;
+
   const rootDict = PDFDict.withContext(ctx);
   rootDict.set(PDFName.of("Type"),  PDFName.of("Outlines"));
   rootDict.set(PDFName.of("First"), itemRefs[rootFirst]);
@@ -1735,11 +1776,48 @@ export default class MarkdownPDFPlugin extends Plugin {
   async loadSettings() {
     const data = (await this.loadData() ?? {}) as Partial<PDFExportSettings> & { presetSnapshots?: Record<string, DocStyle> };
     this.settings = Object.assign({}, DEFAULT_SETTINGS, data);
+
     // Migration: codeTheme was added per-preset; absent value adopts the active preset's default.
     if (data.codeTheme === undefined) {
       this.settings.codeTheme = PRESETS[this.settings.preset]?.codeTheme ?? DEFAULT_SETTINGS.codeTheme;
     }
+
     this.presetSnapshots = data.presetSnapshots ?? {};
+    this.validateSettings();
+  }
+
+  /** Clamps critical numeric settings to safe ranges and repairs invalid
+   *  enum values. Called after load so corrupt or manually-edited JSON
+   *  cannot produce invisible text, zero-size pages, or bad layout. */
+  private validateSettings(): void {
+    const s = this.settings;
+
+    // Unknown preset key → fall back to default.
+    if (!(s.preset in PRESETS)) {
+      console.warn(`[advanced-pdf-export] Unknown preset "${s.preset}", resetting to "default".`);
+      s.preset = "default";
+    }
+
+    // Font sizes must be positive to produce visible text.
+    s.fontSize         = Math.max(1,  s.fontSize);
+    s.headerFontSize   = Math.max(1,  s.headerFontSize);
+    s.footerFontSize   = Math.max(1,  s.footerFontSize);
+
+    // Margins must be non-negative; zero is allowed (full-bleed layouts).
+    s.marginTop        = Math.max(0,  s.marginTop);
+    s.marginBottom     = Math.max(0,  s.marginBottom);
+    s.marginLeft       = Math.max(0,  s.marginLeft);
+    s.marginRight      = Math.max(0,  s.marginRight);
+
+    // Custom page dimensions need a printable minimum.
+    s.customPageWidth  = Math.max(10, s.customPageWidth);
+    s.customPageHeight = Math.max(10, s.customPageHeight);
+
+    // Preview scale must be a usable positive fraction.
+    s.previewScale     = Math.max(0.1, Math.min(3, s.previewScale));
+
+    // Page-number start must be at least 1.
+    s.pageNumberStart  = Math.max(1,  s.pageNumberStart);
   }
 
   async saveSettings() {
@@ -1766,16 +1844,17 @@ export default class MarkdownPDFPlugin extends Plugin {
 
 // ─── File resolver ────────────────────────────────────────────────────────────
 
-// Four-level cascade: explicit file → active MarkdownView → active file → most recent leaf.
+// Two-level cascade: explicit file → active file (if markdown) → most recent MarkdownView leaf.
 function resolveActiveMarkdownFile(app: App, initialFile?: TFile | null): TFile | null {
   if (initialFile) return initialFile;
 
-  const fromView = app.workspace.getActiveViewOfType(MarkdownView)?.file;
-  if (fromView) return fromView;
-
+  // getActiveFile() returns the focused file regardless of view type;
+  // the extension check is enough to confirm it is a markdown file.
   const activeFile = app.workspace.getActiveFile();
   if (activeFile?.extension === "md") return activeFile;
 
+  // Fall back to the most recently used leaf that holds a MarkdownView,
+  // covering cases where focus is on a non-file pane (search, settings, etc.).
   const leaf = app.workspace.getMostRecentLeaf();
   if (leaf?.view instanceof MarkdownView) return leaf.view.file ?? null;
 
@@ -1819,8 +1898,19 @@ class PDFExportModal extends Modal {
     const file = resolveActiveMarkdownFile(this.app, this.initialFile);
 
     if (file) {
+      let content: string;
+      try {
+        content = await this.app.vault.read(file);
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        new Notice(`Failed to read file "${file.basename}": ${msg}`);
+        return;
+      }
+
+      // Guard: user may have closed the modal while vault.read was in flight.
+      if (!this.plugin.activeModal) return;
+
       this.currentFile = file;
-      const content = await this.app.vault.read(file);
       this.editorEl.value = content;
       this.noteTitleEl.textContent = file.basename;
       this.noteTitleEl.title = file.path;
@@ -2021,7 +2111,7 @@ class PDFExportModal extends Modal {
         const msg = err instanceof Error ? err.message : String(err);
         console.error("[advanced-pdf-export] render error:", err);
         this.hideLoading();
-        new Notice("Render error: " + msg);
+        new Notice("Advanced PDF Export — render failed: " + msg);
       });
 
     if (immediate) {
@@ -2221,17 +2311,15 @@ class PDFExportModal extends Modal {
         if (bgUrl) {
           const isContentOnly = s.backgroundImageScope === "content-only";
           const bgEl = activeDocument.createElement("div");
+          const bgCss = bgImageCssProps(s.backgroundImageSize);
           bgEl.setCssStyles({
             position: "absolute",
             ...(isContentOnly
               ? { top: `${mTop + headerH}px`, left: `${mLeft}px`, width: `${contentW}px`, height: `${contentH}px` }
               : { inset: "0" }),
             backgroundImage:    `url('${bgUrl}')`,
-            backgroundRepeat:   s.backgroundImageSize === "tile" ? "repeat" : "no-repeat",
-            backgroundSize:     s.backgroundImageSize === "cover"   ? "cover"
-                              : s.backgroundImageSize === "contain" ? "contain"
-                              : s.backgroundImageSize === "fill"    ? "100% 100%"
-                              : "auto",
+            backgroundRepeat:   bgCss.repeat,
+            backgroundSize:     bgCss.size,
             backgroundPosition: "center",
             opacity:            String(s.backgroundImageOpacity),
             pointerEvents:      "none",
@@ -2240,8 +2328,8 @@ class PDFExportModal extends Modal {
         }
       }
 
-      const pageShowsHeader = s.showHeaderOnFirstPage || layout.pageNum > 1;
-      const pageShowsFooter = s.showFooterOnFirstPage || layout.pageNum > 1;
+      const pageShowsHeader = layout.pageShowsHeader;
+      const pageShowsFooter = layout.pageShowsFooter;
 
       // ── Header banner image (behind header text) ──────────────────────────────
       if (pageShowsHeader && s.showHeader && s.headerImagePath) {
@@ -2265,7 +2353,7 @@ class PDFExportModal extends Modal {
       }
 
       // ── Header text ──────────────────────────────────────────────────────────
-      const hasHeader = s.showHeader && pageShowsHeader && (layout.headerLeft || layout.headerCenter || layout.headerRight || s.showHeaderBorder);
+      const hasHeader = layout.hasHeader;
       if (hasHeader) {
         const hdr = activeDocument.createElement("div");
         hdr.setCssStyles({
@@ -2296,7 +2384,7 @@ class PDFExportModal extends Modal {
 
       // Wire internal anchor links via light-DOM page-wrap scrollIntoView.
       contentDiv.querySelectorAll<HTMLAnchorElement>("a[href^='#']").forEach((a) => {
-        const targetId = decodeURIComponent(a.getAttribute("href")!.slice(1));
+        const targetId = decodeURIComponent((a.getAttribute("href") ?? "").slice(1));
         const wrapIdx  = idToWrapIndex.get(targetId);
         if (wrapIdx !== undefined) {
           a.title = `Go to page ${wrapIdx + 1}`;
@@ -2329,7 +2417,7 @@ class PDFExportModal extends Modal {
       }
 
       // ── Footer text ───────────────────────────────────────────────────────────
-      const hasFooter = s.showFooter && pageShowsFooter && (layout.footerLeft || layout.footerRight || layout.footerCenter || s.showFooterBorder);
+      const hasFooter = layout.hasFooter;
       if (hasFooter) {
         const footer = activeDocument.createElement("div");
         footer.setCssStyles({
@@ -2376,7 +2464,7 @@ class PDFExportModal extends Modal {
         await this.doRender(token);
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
-        new Notice("Render error: " + msg);
+        new Notice("Advanced PDF Export — render failed: " + msg);
         this.hideLoading();
         resetExportBtn();
         return;
@@ -2404,38 +2492,27 @@ class PDFExportModal extends Modal {
 
     // Page background image HTML (identical on every page; rendered first so it's behind everything)
     const bgImgHTML = resolvedBgImgUrl ? (() => {
-      const sz = s.backgroundImageSize === "cover"   ? "cover"
-               : s.backgroundImageSize === "contain" ? "contain"
-               : s.backgroundImageSize === "fill"    ? "100% 100%"
-               : "auto";
-      const rp  = s.backgroundImageSize === "tile" ? "repeat" : "no-repeat";
+      const bgCss = bgImageCssProps(s.backgroundImageSize);
       const pos = s.backgroundImageScope === "content-only"
         ? `top:${mTop + headerH}px;left:${mLeft}px;width:${contentW}px;height:${contentH}px;`
         : `inset:0;`;
-      const common = `background-image:url('${resolvedBgImgUrl}');background-size:${sz};background-repeat:${rp};background-position:center;opacity:${s.backgroundImageOpacity};pointer-events:none;`;
+      const common = `background-image:url('${resolvedBgImgUrl}');background-size:${bgCss.size};background-repeat:${bgCss.repeat};background-position:center;opacity:${s.backgroundImageOpacity};pointer-events:none;`;
       return `<div style="position:absolute;${pos}${common}"></div>`;
     })() : "";
 
     const pageHTMLParts = layouts.map((layout) => {
-      const contentHTML = layout.pageNodes.map((n) => {
-        const clone = n.cloneNode(true) as HTMLElement;
-        // Styles inside SVGs are kept — mermaid embeds its theme CSS there.
-        clone.querySelectorAll("style, script").forEach((el) => {
-          if (!el.closest("svg")) el.remove();
-        });
-        return clone.outerHTML;
-      }).join("\n");
+      // pageNodes have already been through postProcessRenderedHTML, which
+      // strips style/script tags (preserving those inside SVGs for mermaid).
+      // No further sanitisation needed — serialize directly.
+      const contentHTML = layout.pageNodes.map((n) => n.outerHTML).join("\n");
 
-      const pageShowsHeader = s.showHeaderOnFirstPage || layout.pageNum > 1;
-      const pageShowsFooter = s.showFooterOnFirstPage || layout.pageNum > 1;
-
-      const hasExportHeader = s.showHeader && pageShowsHeader && (layout.headerLeft || layout.headerCenter || layout.headerRight || s.showHeaderBorder);
+      const hasExportHeader = layout.hasHeader;
       const headerBorder = s.showHeaderBorder ? `border-bottom:0.5px solid ${exportAccent}33;` : "";
       const headerHTML = hasExportHeader
         ? `<div style="position:absolute;top:${mTop * 0.4}px;left:${mLeft}px;right:${mRight}px;display:flex;align-items:center;font-size:${s.headerFontSize}px;color:${s.headerFontColor};font-family:${fontFamily};white-space:nowrap;${headerBorder}">${buildHFInnerHTML(layout.headerCenter, layout.headerLeft, layout.headerRight)}</div>`
         : "";
 
-      const hasExportFooter = s.showFooter && pageShowsFooter && (layout.footerLeft || layout.footerRight || layout.footerCenter || s.showFooterBorder);
+      const hasExportFooter = layout.hasFooter;
       const footerBorder = s.showFooterBorder ? `border-top:0.5px solid ${exportAccent}33;` : "";
       const footerHTML = hasExportFooter
         ? `<div style="position:absolute;bottom:0;left:0;right:0;height:${footerH}px;display:flex;align-items:center;${footerBorder}padding:0 ${mRight}px 0 ${mLeft}px;font-size:${s.footerFontSize}px;color:${s.footerFontColor};font-family:${fontFamily};">${buildHFInnerHTML(layout.footerCenter, layout.footerLeft, layout.footerRight)}</div>`
@@ -2444,10 +2521,10 @@ class PDFExportModal extends Modal {
       const contentDivHTML = `<div class="mpdf-doc"${isRTL ? ' dir="rtl"' : ''} style="position:absolute;top:${mTop + headerH}px;left:${mLeft}px;width:${contentW}px;">${contentHTML}</div>`;
 
       // Banner divs precede their text divs so DOM order puts text on top.
-      const headerBannerHTML = (pageShowsHeader && resolvedHeaderBannerUrl)
+      const headerBannerHTML = (layout.pageShowsHeader && resolvedHeaderBannerUrl)
         ? `<div style="position:absolute;top:${mTop * 0.4}px;left:${s.headerImageMargin}px;right:${s.headerImageMargin}px;height:${headerH}px;background-image:url('${resolvedHeaderBannerUrl}');background-size:cover;background-position:center;background-repeat:no-repeat;pointer-events:none;"></div>`
         : "";
-      const footerBannerHTML = (pageShowsFooter && resolvedFooterBannerUrl)
+      const footerBannerHTML = (layout.pageShowsFooter && resolvedFooterBannerUrl)
         ? `<div style="position:absolute;bottom:0;left:${s.footerImageMargin}px;right:${s.footerImageMargin}px;height:${footerH}px;background-image:url('${resolvedFooterBannerUrl}');background-size:cover;background-position:center;background-repeat:no-repeat;pointer-events:none;"></div>`
         : "";
 
@@ -2503,7 +2580,7 @@ ${pageHTMLParts.join("\n")}
         return;
       }
 
-      new Notice("Generating PDF…");
+      new Notice("Advanced PDF Export — generating PDF…");
 
       const blob = new Blob([fullHTML], { type: "text/html" });
       const url  = URL.createObjectURL(blob);
@@ -2518,7 +2595,7 @@ ${pageHTMLParts.join("\n")}
       win.webContents.once("did-fail-load", (_event: unknown, _code: number, desc: string) => {
         if (exportHandled) return;
         exportHandled = true;
-        new Notice("PDF load error: " + desc);
+        new Notice("Advanced PDF Export — failed to load page: " + desc);
         cleanupWin();
       });
 
@@ -2553,18 +2630,18 @@ ${pageHTMLParts.join("\n")}
               }
             }
             electron.require("fs").writeFile(res.filePath!, data, (err: Error | null) => {
-              if (err) new Notice("Error saving PDF: " + err.message);
-              else     new Notice("✓ PDF saved: " + res.filePath);
+              if (err) new Notice("Advanced PDF Export — failed to save: " + err.message);
+              else     new Notice("✓ PDF saved — " + res.filePath);
               cleanupWin();
             });
           })
           .catch((err: Error) => {
-            new Notice("PDF render error: " + err.message);
+            new Notice("Advanced PDF Export — failed to render: " + err.message);
             cleanupWin();
           });
       });
     } catch {
-      new Notice("Advanced PDF export requires the Obsidian desktop app.");
+      new Notice("Advanced PDF Export requires the Obsidian desktop app.");
       resetExportBtn();
     }
   }
@@ -2671,11 +2748,11 @@ class PDFExportSettingTab extends PluginSettingTab {
       .setDesc("Width × Height in millimetres.")
       .addText((t) =>
         t.setPlaceholder("Width").setValue(String(s.customPageWidth))
-         .onChange((v) => { s.customPageWidth  = Math.max(1, parseFloat(v) || 210); void this.markDirty(); }),
+         .onChange((v) => { s.customPageWidth  = Math.max(10, parseFloat(v) || 210); void this.markDirty(); }),
       )
       .addText((t) =>
         t.setPlaceholder("Height").setValue(String(s.customPageHeight))
-         .onChange((v) => { s.customPageHeight = Math.max(1, parseFloat(v) || 297); void this.markDirty(); }),
+         .onChange((v) => { s.customPageHeight = Math.max(10, parseFloat(v) || 297); void this.markDirty(); }),
       );
     customPageSizeSetting.settingEl.toggleClass("mpdf-is-hidden", s.pageSize !== "Custom");
     new Setting(containerEl).setName("Orientation").addDropdown((d) =>
