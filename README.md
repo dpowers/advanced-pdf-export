@@ -47,15 +47,14 @@ Type `///` on its own line, or click **Insert Page Break** in the toolbar.
 ![Preset dropdown](screenshots/style1.png)
 
 <p align="center">
-  <img src="screenshots/style2.png" alt="Academic preset" width="49%">
-  <img src="screenshots/style3.png" alt="Style 3" width="49%">
+  <img src="screenshots/style2.png" alt="Academic preset" height="320">
+  <img src="screenshots/style3.png" alt="Style 3" height="320">
 </p>
 
 <p align="center">
-  <img src="screenshots/style4.png" alt="Style 4" width="49%">
-  <img src="screenshots/style5.png" alt="Style 5" width="49%">
+  <img src="screenshots/style4.png" alt="Style 4" height="320">
+  <img src="screenshots/style5.png" alt="Style 5" height="320">
 </p>
-
 
 ## Installation
 
