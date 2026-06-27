@@ -519,8 +519,7 @@ async function renderMarkdownToEl(
   component: Component,
 ): Promise<HTMLElement> {
   const temp = activeDocument.createElement("div");
-  // Attach offscreen so Obsidian's async post-processors (mermaid, math) run in a real DOM context.
-  // Detached again before returning.
+  // Attached offscreen so Obsidian's async post-processors (mermaid, math) run in a real DOM context.
   temp.setCssStyles({ position: "fixed", top: "0", left: "-99999px", visibility: "hidden", pointerEvents: "none" });
   activeDocument.body.appendChild(temp);
   try {
@@ -539,8 +538,8 @@ async function renderMarkdownToEl(
   return temp;
 }
 
-// Pre-compiled once — .replace() does not maintain lastIndex so g-flagged
-// module-level constants are safe here.
+// Pre-compiled once. String.replace() and String.matchAll() both reset a
+// regex's lastIndex to 0 on each call, so module-level g-flagged constants are safe.
 const SLUG_STRIP = /[^\p{L}\p{N}\s-]/gu;
 const SLUG_SPACE = /\s+/g;
 const SLUG_DASH  = /-+/g;
@@ -1065,11 +1064,9 @@ async function getMathJaxCSSInlined(): Promise<string> {
   });
 }
 
-// Matches url(...) references in CSS. Used by getMathJaxCSSInlined to collect
-// Matches url(...) references in CSS. Used by getMathJaxCSSInlined to collect
-// and then replace font URLs with base64 data URIs.
-// Safe to share as a module-level constant: .replace() and matchAll() both
-// start a fresh scan regardless of the regex's lastIndex state.
+// Matches url(...) references in CSS — used by getMathJaxCSSInlined to collect
+// and replace font URLs with base64 data URIs. String.replace() and matchAll()
+// both reset lastIndex to 0 on each call, so this g-flagged constant is safe to share.
 const CSS_URL_RE = /url\(\s*["']?([^"')]+)["']?\s*\)/g;
 
 // ─── Paginator ────────────────────────────────────────────────────────────────
