@@ -1,6 +1,6 @@
 import {
   App, Component, MarkdownRenderer, MarkdownView, Menu, Modal, Notice,
-  Plugin, PluginSettingTab, Setting, TFile, setIcon,
+  Plugin, PluginSettingTab, Setting, TFile, requestUrl, setIcon,
 } from "obsidian";
 import { PDFArray, PDFDict, PDFDocument, PDFHexString, PDFName, PDFNull, PDFNumber } from "pdf-lib";
 
@@ -528,7 +528,7 @@ async function renderMarkdownToEl(
     // Wait for MathJax's lazily-loaded @font-face files to arrive before we
     // clone nodes; glyphs in unloaded font ranges render as invisible characters.
     const docFonts = (activeDocument as Document & { fonts?: { ready?: Promise<unknown> } }).fonts;
-    if (docFonts?.ready) {
+    if (docFonts) {
       try { await docFonts.ready; } catch { /* non-critical */ }
     }
   } finally {
@@ -1034,10 +1034,9 @@ async function getMathJaxCSSInlined(): Promise<string> {
 
   const toDataUri = async (url: string): Promise<string> => {
     try {
-      const res = await fetch(url);
-      if (!res.ok) return url;
-      const buf   = await res.arrayBuffer();
-      const bytes = new Uint8Array(buf);
+      const res = await requestUrl(url);
+      if (res.status !== 200) return url;
+      const bytes = new Uint8Array(res.arrayBuffer);
       let bin = "";
       for (let i = 0; i < bytes.length; i += 8192) // chunk to avoid stack overflow
         bin += String.fromCharCode(...bytes.subarray(i, Math.min(i + 8192, bytes.length)));
@@ -1503,7 +1502,6 @@ function buildPageLayouts(allPages: HTMLElement[][], s: PDFExportSettings): Page
     let headerLeft = "", headerCenter = "", headerRight = "";
 
     if (pageShowsFooter) {
-      // Place footer text in its alignment zone.
       if (s.footerText) {
         if      (s.footerTextAlignment === "center") footerCenter = s.footerText;
         else if (s.footerTextAlignment === "left")   footerLeft   = s.footerText;
