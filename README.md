@@ -1,11 +1,16 @@
 # Advanced PDF Export — Obsidian Plugin
 
+![GitHub release](https://img.shields.io/github/v/release/ShrekBytes/advanced-pdf-export)
+![License](https://img.shields.io/github/license/ShrekBytes/advanced-pdf-export)
+![Obsidian Downloads](https://img.shields.io/badge/dynamic/json?logo=obsidian&color=%23483699&label=downloads&query=%24%5B%22advanced-pdf-export%22%5D.downloads&url=https%3A%2F%2Fraw.githubusercontent.com%2Fobsidianmd%2Fobsidian-stats%2Fmaster%2Fplugin-download-stats.json)
+
 Export Obsidian notes as pixel-perfect PDFs with seven style presets, manual page breaks, full layout control, and a live preview — all from a full-screen modal panel.
 
 > **Desktop only** — requires the Obsidian desktop app (uses Electron's print pipeline).
 
-![Main panel with live preview](screenshots/preview.png)
+If this plugin saves you time, consider **[supporting the project](https://shrekbytes.github.io/support/)** ☕
 
+![Main panel with live preview](screenshots/preview.png)
 
 ## Table of Contents
 
@@ -15,7 +20,6 @@ Export Obsidian notes as pixel-perfect PDFs with seven style presets, manual pag
 - [Usage](#usage)
 - [Settings Reference](#settings-reference)
 - [License](#license)
-
 
 ## Features
 
@@ -32,41 +36,42 @@ Export Obsidian notes as pixel-perfect PDFs with seven style presets, manual pag
 - **Header & footer** — custom text, page numbers (X / Y), alignment, font size/color, optional banner image, and first-page suppression
 - **PDF outline (bookmarks)** — heading-based bookmark tree embedded in the exported PDF; most PDF readers display it in a side panel
 
-
 ## Screenshots
 
 ### Panel Overview
+
 ![Panel overview](screenshots/overview.png)
 
 ### Page Breaks
+
 Type `///` on its own line, or click **Insert Page Break** in the toolbar.
 
 ![Page break syntax](screenshots/usage.png)
 
 ### Style Presets
+
 ![Preset dropdown](screenshots/style1.png)
 
-<p align="center">
-  <img src="screenshots/style2.png" alt="Academic preset" height="320">
-  <img src="screenshots/style3.png" alt="Style 3" height="320">
-</p>
+| Academic preset | Style 3 |
+|:---:|:---:|
+| ![Academic preset](screenshots/style2.png) | ![Style 3](screenshots/style3.png) |
 
-<p align="center">
-  <img src="screenshots/style4.png" alt="Style 4" height="320">
-  <img src="screenshots/style5.png" alt="Style 5" height="320">
-</p>
+| Style 4 | Style 5 |
+|:---:|:---:|
+| ![Style 4](screenshots/style4.png) | ![Style 5](screenshots/style5.png) |
 
 ## Installation
 
 ### Community Plugins (Recommended)
+
 Search for **Advanced PDF Export** in **Settings → Community Plugins → Browse**, then install and enable it.
 
 ### Manual (GitHub Releases)
+
 1. Go to the [Releases](https://github.com/ShrekBytes/advanced-pdf-export/releases) page.
 2. Download `main.js`, `manifest.json`, and `styles.css` from the latest release.
 3. Place them in your vault at `.obsidian/plugins/advanced-pdf-export/`.
 4. Reload Obsidian and enable the plugin under **Settings → Community Plugins**.
-
 
 ## Usage
 
@@ -84,18 +89,19 @@ Search for **Advanced PDF Export** in **Settings → Community Plugins → Brows
 
 **Open settings** — click the ⚙ icon in the topbar, or go to **Settings → Advanced PDF Export**.
 
-
 ## Settings Reference
 
 All settings take effect after closing the settings panel.
 
 ### Style Preset
+
 | Setting | Description |
 |---|---|
 | Preset | Style theme: Default, Minimal, Academic, Colorful, Modern, Newspaper, Dark |
 | Reset Preset | Restores all typographic and color values for the current preset to defaults |
 
 ### Page
+
 | Setting | Description |
 |---|---|
 | Page size | A4, A3, A5, Letter, Legal, or Custom |
@@ -103,6 +109,7 @@ All settings take effect after closing the settings panel.
 | Orientation | Portrait or Landscape |
 
 ### Margin & Frame
+
 | Setting | Description |
 |---|---|
 | Margins | Top · Bottom · Left · Right in mm |
@@ -113,6 +120,7 @@ All settings take effect after closing the settings panel.
 | Frame style | Solid, Dashed, Dotted, Double, Groove, or Ridge |
 
 ### Typography
+
 | Setting | Options |
 |---|---|
 | Font family | Georgia, Times New Roman, Palatino, Arial, Helvetica, Trebuchet, Courier New, Custom |
@@ -124,6 +132,7 @@ All settings take effect after closing the settings panel.
 | Heading scale | 0.8× → 1.2× multiplier applied to all heading sizes |
 
 ### Background
+
 | Setting | Description |
 |---|---|
 | Use image background | When on, a background image replaces the solid background color |
@@ -134,6 +143,7 @@ All settings take effect after closing the settings panel.
 | Opacity | 5% – 100% |
 
 ### Colors
+
 | Setting | Description |
 |---|---|
 | Accent color | Primary accent used for links, borders, and highlights |
@@ -146,6 +156,7 @@ All settings take effect after closing the settings panel.
 | Code syntax theme | Colors fenced code blocks independently of your Obsidian theme. Options: None, GitHub Light, GitHub Dark, Atom One Light, Atom One Dark, Monokai, Dracula, Tokyo Night, Solarized Light, Catppuccin Macchiato, Catppuccin Mocha |
 
 ### Header
+
 | Setting | Description |
 |---|---|
 | Show header | Toggle the header on or off |
@@ -160,6 +171,7 @@ All settings take effect after closing the settings panel.
 | Image left/right margin | Insets the banner from the left and right page edges (px) |
 
 ### Footer
+
 | Setting | Description |
 |---|---|
 | Show footer | Toggle the footer on or off |
@@ -177,6 +189,7 @@ All settings take effect after closing the settings panel.
 | Page number start | Number assigned to the first visible page number (default 1) |
 
 ### Behaviour
+
 | Setting | Description |
 |---|---|
 | Hide frontmatter | Strip the YAML frontmatter block (`--- … ---`) from preview and PDF |
@@ -193,4 +206,6 @@ All settings take effect after closing the settings panel.
 
 ## License
 
-Open source under [GPL-3.0 License](LICENSE)
+Open source under [GPL-3.0 License](LICENSE).
+
+Contributions are welcome — feel free to open issues or pull requests.
