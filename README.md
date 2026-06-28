@@ -2,7 +2,7 @@
 
 ![GitHub release](https://img.shields.io/github/v/release/ShrekBytes/advanced-pdf-export)
 ![License](https://img.shields.io/github/license/ShrekBytes/advanced-pdf-export)
-[![Obsidian Downloads](https://img.shields.io/badge/dynamic/json?logo=obsidian&color=%23483699&label=downloads&query=%24%5B%22advanced-pdf-export%22%5D.downloads&url=https%3A%2F%2Fraw.githubusercontent.com%2Fobsidianmd%2Fobsidian-stats%2Fmaster%2Fplugin-download-stats.json)](https://obsidian.md/plugins?id=advanced-pdf-export)
+[![Obsidian Downloads](https://img.shields.io/badge/dynamic/json?logo=obsidian&color=%23483699&label=downloads&query=%24%5B%22advanced-pdf-export%22%5D.downloads&url=https%3A%2F%2Fraw.githubusercontent.com%2Fobsidianmd%2Fobsidian-releases%2Fmaster%2Fcommunity-plugin-stats.json)](https://obsidian.md/plugins?id=advanced-pdf-export)
 
 Export Obsidian notes as pixel-perfect PDFs with seven style presets, manual page breaks, full layout control, and a live preview — all from a full-screen modal panel.
 
