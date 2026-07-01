@@ -58,7 +58,7 @@ interface ElectronBrowserWindow {
       printBackground: boolean;
       preferCSSPageSize?: boolean;
       margins: { marginType: string };
-    }): Promise<Buffer>;
+    }): Promise<Uint8Array>;
   };
 }
 
@@ -77,7 +77,7 @@ interface ElectronRemote {
 }
 
 interface ElectronFs {
-  writeFile(path: string, data: Buffer, cb: (err: Error | null) => void): void;
+  writeFile(path: string, data: Uint8Array, cb: (err: Error | null) => void): void;
 }
 
 interface ElectronBridge {
@@ -1608,7 +1608,7 @@ function extractOutlineEntries(layouts: PageLayout[]): OutlineEntry[] {
  * collapsed by default (negative /Count per PDF spec). PageMode is set to
  * UseOutlines so readers open the bookmarks panel on load.
  */
-async function injectPDFOutline(pdfBuffer: Buffer, entries: OutlineEntry[]): Promise<Buffer> {
+async function injectPDFOutline(pdfBuffer: Uint8Array, entries: OutlineEntry[]): Promise<Uint8Array> {
   if (!entries.length) return pdfBuffer;
 
   const pdfDoc = await PDFDocument.load(pdfBuffer);
@@ -1709,7 +1709,7 @@ async function injectPDFOutline(pdfBuffer: Buffer, entries: OutlineEntry[]): Pro
   pdfDoc.catalog.set(PDFName.of("Outlines"), outlineRef);
   pdfDoc.catalog.set(PDFName.of("PageMode"), PDFName.of("UseOutlines"));
 
-  return Buffer.from(await pdfDoc.save());
+  return await pdfDoc.save();
 }
 
 // ─── Header / footer / frame rendering helpers ───────────────────────────────
@@ -2651,7 +2651,7 @@ ${pageHTMLParts.join("\n")}
               margins:           { marginType: "none" },
             });
           })
-          .then(async (data: Buffer) => {
+          .then(async (data: Uint8Array) => {
             // printToPDF produces a flat PDF with no outline; inject one via pdf-lib.
             if (s.includeOutline) {
               try {
