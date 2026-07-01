@@ -525,6 +525,7 @@ async function renderMarkdownToEl(
   try {
     await MarkdownRenderer.render(app, markdown, temp, sourcePath, component);
     await waitForMermaidDiagrams(temp);
+    await waitForMathRendering(temp);
     // Wait for MathJax's lazily-loaded @font-face files to arrive before we
     // clone nodes; glyphs in unloaded font ranges render as invisible characters.
     const docFonts = (activeDocument as Document & { fonts?: { ready?: Promise<unknown> } }).fonts;
@@ -621,6 +622,41 @@ async function waitForMermaidDiagrams(el: HTMLElement): Promise<void> {
           obs.observe(m, { childList: true, subtree: true });
         }),
     ),
+  );
+}
+
+/** Waits for MathJax to finish typesetting `.math` spans (native math and Latex
+ *  Suite equations use the same renderer). Drains the shared `startup.promise`
+ *  queue first, then falls back to a per-element observer, timing out at 8 s. */
+async function waitForMathRendering(el: HTMLElement): Promise<void> {
+  const containers = Array.from(el.querySelectorAll<HTMLElement>(".math"));
+  if (containers.length === 0) return;
+
+  const mathJax = (window as unknown as {
+    MathJax?: { startup?: { promise?: Promise<unknown> } };
+  }).MathJax;
+  if (mathJax?.startup?.promise) {
+    try { await mathJax.startup.promise; } catch { /* fall through to per-element wait */ }
+  }
+
+  const TIMEOUT_MS = 8000;
+  await Promise.all(
+    containers
+      .filter((m) => !m.querySelector("mjx-container"))
+      .map(
+        (m) =>
+          new Promise<void>((resolve) => {
+            const timer = window.setTimeout(() => { obs.disconnect(); resolve(); }, TIMEOUT_MS);
+            const obs = new MutationObserver(() => {
+              if (m.querySelector("mjx-container")) {
+                window.clearTimeout(timer);
+                obs.disconnect();
+                resolve();
+              }
+            });
+            obs.observe(m, { childList: true, subtree: true });
+          }),
+      ),
   );
 }
 
