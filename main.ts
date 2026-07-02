@@ -1,6 +1,7 @@
 import {
   App, Component, MarkdownRenderer, MarkdownView, Menu, Modal, Notice,
   Plugin, PluginSettingTab, Setting, TFile, requestUrl, setIcon,
+  finishRenderMath,
 } from "obsidian";
 import { PDFArray, PDFDict, PDFDocument, PDFHexString, PDFName, PDFNull, PDFNumber } from "pdf-lib";
 
@@ -524,6 +525,13 @@ async function renderMarkdownToEl(
   activeDocument.body.appendChild(temp);
   try {
     await MarkdownRenderer.render(app, markdown, temp, sourcePath, component);
+    // MarkdownRenderer.render()'s own promise can resolve before math queued by
+    // its internal post-processor (via renderMath()) has actually finished
+    // typesetting. finishRenderMath() is Obsidian's documented way to flush that
+    // shared queue — it's the fix for this specific race, not just another
+    // heuristic wait. Best-effort: if it's unavailable or throws, the
+    // mjx-container + stylesheet-stability waits below are the backstop.
+    try { await finishRenderMath(); } catch { /* non-critical — see waitForMathRendering */ }
     await waitForMermaidDiagrams(temp);
     await waitForMathRendering(temp);
     // Wait for MathJax's lazily-loaded @font-face files to arrive before we
@@ -626,8 +634,31 @@ async function waitForMermaidDiagrams(el: HTMLElement): Promise<void> {
 }
 
 /** Waits for MathJax to finish typesetting `.math` spans (native math and Latex
- *  Suite equations use the same renderer). Drains the shared `startup.promise`
- *  queue first, then falls back to a per-element observer, timing out at 8 s. */
+ *  Suite equations use the same renderer), AND for its CHTML stylesheet to stop
+ *  mutating.
+ *
+ *  `MathJax.startup.promise` is awaited first as a cheap early gate, but it is
+ *  NOT a per-render "queue drained" signal — it resolves once, at MathJax's
+ *  initial boot, and will already be resolved by the time this plugin runs. It
+ *  proves nothing about whether *this* render pass is finished.
+ *
+ *  The per-element `mjx-container` observer below is also insufficient on its
+ *  own: it only proves the DOM shell for a piece of math has landed. MathJax's
+ *  CHTML output uses `adaptiveCSS` — it generates the actual per-character CSS
+ *  rules (the `.mjx-c…` class rules that map a glyph to `content` + a specific
+ *  `font-family`) incrementally, into a shared, session-level stylesheet, as
+ *  new characters are encountered. That stylesheet write is not guaranteed to
+ *  have landed by the moment the container appears. In practice this meant
+ *  common glyphs (plain digits/letters, from the Main/Math-Italic fonts) were
+ *  always fine, while less-common ones — AMS symbols, blackboard-bold letters,
+ *  bold text, Fraktur/Script/etc. — intermittently rendered as invisible
+ *  characters in exported PDFs, because their CSS rules simply weren't in the
+ *  stylesheet yet when it was captured for export.
+ *
+ *  So after the DOM wait, we also poll the shared stylesheet
+ *  (`waitForMathJaxStylesheetStable`) until it stops growing before declaring
+ *  math "done". Total wait is bounded (8s for the DOM wait, +2.5s for the
+ *  stylesheet wait) so a genuinely stuck render can't hang the export forever. */
 async function waitForMathRendering(el: HTMLElement): Promise<void> {
   const containers = Array.from(el.querySelectorAll<HTMLElement>(".math"));
   if (containers.length === 0) return;
@@ -658,6 +689,36 @@ async function waitForMathRendering(el: HTMLElement): Promise<void> {
           }),
       ),
   );
+
+  await waitForMathJaxStylesheetStable();
+}
+
+/** Polls MathJax's shared `style[id^='MJX-']` stylesheet (see `getMathJaxCSS`)
+ *  until its total size stops changing for a couple of consecutive checks.
+ *  This is the actual completion signal for `adaptiveCSS`-generated per-glyph
+ *  rules — DOM insertion of `mjx-container` alone doesn't guarantee they've
+ *  been flushed yet (see `waitForMathRendering`). Bounded by MAX_WAIT_MS so a
+ *  stylesheet that's genuinely done (nothing left to add) can't stall forever;
+ *  in the common case where nothing new is pending, this resolves in ~2 polls. */
+async function waitForMathJaxStylesheetStable(): Promise<void> {
+  const POLL_MS = 60;
+  const STABLE_ROUNDS = 2;
+  const MAX_WAIT_MS = 2500;
+
+  const start = Date.now();
+  let lastLen = getMathJaxCSS().length;
+  let stableRounds = 0;
+
+  while (stableRounds < STABLE_ROUNDS && Date.now() - start < MAX_WAIT_MS) {
+    await new Promise<void>((resolve) => window.setTimeout(resolve, POLL_MS));
+    const len = getMathJaxCSS().length;
+    if (len === lastLen) {
+      stableRounds++;
+    } else {
+      stableRounds = 0;
+      lastLen = len;
+    }
+  }
 }
 
 // ─── Code block syntax highlighting ────────────────────────────────────────
@@ -1036,13 +1097,73 @@ function extractDocStyle(s: PDFExportSettings): DocStyle {
   };
 }
 
-/** Collects MathJax's injected stylesheets for inclusion in shadow DOMs and
- *  the export HTML.  Targets `MJX-` prefixed IDs to avoid capturing unrelated
- *  theme stylesheets that Obsidian injects into the document head. */
+/** Collects MathJax's CSS for inclusion in shadow DOMs and the export HTML.
+ *
+ *  This has to check three sources, and missing any one causes specific
+ *  glyphs to render as blank/invisible while everything else looks fine —
+ *  confirmed directly: `mjx-c2135` (aleph) paints correctly in native reading
+ *  view, yet is absent from every `<style>` tag's `.textContent` in `<head>`.
+ *  That combination is only possible if a rule is active in the live CSSOM
+ *  without ever having been written into any tag's source text — which
+ *  happens two ways in a browser, and MathJax's `adaptiveCSS` mode could
+ *  plausibly use either:
+ *
+ *  1. `style[id^='MJX-']`'s `.textContent` — the static, always-present
+ *     `@font-face` declarations (all ~20 font variants) plus whatever common
+ *     characters (digits, basic operators, italic variables) were part of
+ *     the tag's original parsed text.
+ *  2. That SAME tag's live `.sheet.cssRules` — if new per-glyph rules are
+ *     added via `CSSStyleSheet.insertRule()`, they mutate the live sheet
+ *     immediately but never touch `.textContent`. `cssRules` is a strict
+ *     superset of what `.textContent` shows, so reading it directly makes
+ *     source #1 redundant whenever `.sheet` is accessible — kept as a
+ *     fallback only for the rare case a sheet can't be reached.
+ *  3. `document.adoptedStyleSheets` — Constructable Stylesheets registered
+ *     with no corresponding `<style>` DOM node at all, so no amount of
+ *     `querySelectorAll('style')` could ever see them regardless of which
+ *     property is read.
+ *
+ *  Every previous capture here only checked source #1's `.textContent`,
+ *  which is why specific glyph families were silently and permanently
+ *  missing no matter how long anything was awaited beforehand — this was
+ *  never a timing problem, it was reading the wrong property. */
 function getMathJaxCSS(): string {
-  return Array.from(
+  const styleEls = Array.from(
     activeDocument.head.querySelectorAll<HTMLStyleElement>("style[id^='MJX-']"),
-  ).map((el) => el.textContent ?? "").join("\n");
+  );
+
+  const styleTagCSS = styleEls
+    .map((el) => {
+      try {
+        if (el.sheet?.cssRules) {
+          return Array.from(el.sheet.cssRules).map((rule) => rule.cssText).join("\n");
+        }
+      } catch {
+        // sheet inaccessible on this element for some reason; fall back below
+      }
+      return el.textContent ?? "";
+    })
+    .join("\n");
+
+  let adoptedCSS = "";
+  try {
+    const sheets = (activeDocument as Document).adoptedStyleSheets ?? [];
+    adoptedCSS = sheets
+      .map((sheet) => {
+        try {
+          return Array.from(sheet.cssRules).map((rule) => rule.cssText).join("\n");
+        } catch {
+          return ""; // rules inaccessible on this sheet; skip it, keep the rest
+        }
+      })
+      .filter(Boolean)
+      .join("\n");
+  } catch {
+    /* adoptedStyleSheets unsupported in this Electron/Chromium build — degrade
+     * to style-tag CSS only. */
+  }
+
+  return adoptedCSS ? `${styleTagCSS}\n${adoptedCSS}` : styleTagCSS;
 }
 
 /** Strips @font-face rules from CSS before injecting into shadow-DOM adoptedStyleSheets.
@@ -2240,6 +2361,12 @@ class PDFExportModal extends Modal {
 
     if (token !== this.renderToken) return;
 
+    // Defensive re-check: each renderMarkdownToEl() call above already waits for
+    // the MathJax stylesheet to settle, but this capture is the actual source of
+    // truth for both the preview and (indirectly) the export, so we re-verify
+    // stability here too before reading it — cheap when already stable.
+    await waitForMathJaxStylesheetStable();
+
     // Strip @font-face before adding MathJax CSS to adoptedStyleSheets — document.head
     // fonts are accessible to shadow DOM per spec, and some Electron builds silently
     // fail to load fonts declared inside an adopted CSSStyleSheet.
@@ -2561,6 +2688,11 @@ class PDFExportModal extends Modal {
 
       return `<div class="mpdf-export-page">${bgImgHTML}${headerBannerHTML}${headerHTML}${contentDivHTML}${footerBannerHTML}${footerHTML}${frameHTML}</div>`;
     });
+
+    // Defensive re-check: confirm the stylesheet is still settled immediately
+    // before the capture that actually ends up in the exported PDF. This is the
+    // last point where a missing per-glyph CSS rule would be uncatchable.
+    await waitForMathJaxStylesheetStable();
 
     // Inline MathJax fonts as base64 data URIs — the export BrowserWindow's blob:
     // origin cannot resolve the app:// font paths MathJax normally references.
