@@ -1,7 +1,7 @@
 import {
   App, Component, MarkdownRenderer, MarkdownView, Menu, Modal, Notice,
   Plugin, PluginSettingTab, Setting, TFile, requestUrl, setIcon,
-  finishRenderMath,
+  finishRenderMath, renderMath,
 } from "obsidian";
 import { PDFArray, PDFDict, PDFDocument, PDFHexString, PDFName, PDFNull, PDFNumber } from "pdf-lib";
 
@@ -513,6 +513,31 @@ function splitMarkdownSections(md: string): string[] {
     .filter(Boolean);
 }
 
+/** Fires MathJax's one-time cold-start boot and `adaptiveCSS` setup for the
+ *  font families most often missing on a session's first real render (bold,
+ *  AMS symbols, blackboard-bold, fraktur, calligraphic, sans-serif,
+ *  typewriter, vector) as soon as the plugin loads, in the background —
+ *  rather than paying that cost the first time the user actually renders.
+ *  Fire-and-forget: nothing downstream awaits this, and the real render path
+ *  (`waitForMathRendering` / `waitForMathJaxStylesheetStable`) still verifies
+ *  completion correctly on its own regardless of whether this has finished. */
+async function warmUpMathJax(): Promise<void> {
+  const temp = activeDocument.createElement("div");
+  temp.setCssStyles({ position: "fixed", top: "0", left: "-99999px", pointerEvents: "none" });
+  activeDocument.body.appendChild(temp);
+  try {
+    temp.appendChild(
+      renderMath("\\mathbf{A}+\\mathfrak{A}+\\mathcal{A}+\\mathsf{A}+\\mathtt{A}+\\mathbb{A}+\\aleph+\\vec{v}", true),
+    );
+    const timeout = new Promise<void>((resolve) => window.setTimeout(resolve, 5000));
+    await Promise.race([finishRenderMath(), timeout]);
+  } catch (err) {
+    console.warn("[advanced-pdf-export] MathJax warm-up failed (non-fatal):", err);
+  } finally {
+    temp.remove();
+  }
+}
+
 async function renderMarkdownToEl(
   app: App,
   markdown: string,
@@ -527,8 +552,19 @@ async function renderMarkdownToEl(
     await MarkdownRenderer.render(app, markdown, temp, sourcePath, component);
     // Flushes Obsidian's MathJax render queue — MarkdownRenderer.render()'s own
     // promise can resolve before queued math has actually finished typesetting.
+    // Bounded with a race: on a cold Obsidian session (MathJax not yet used
+    // anywhere in this window), this has been observed to hang far longer than
+    // expected instead of resolving, blocking the whole render indefinitely.
+    // waitForMathRendering()/waitForMathJaxStylesheetStable() below are the
+    // real, already-bounded correctness check regardless of whether this
+    // resolves in time — so there's no harm in giving up on it early.
+    const FINISH_RENDER_MATH_TIMEOUT_MS = 3000;
     try {
-      await finishRenderMath();
+      let timer: number;
+      await Promise.race([
+        finishRenderMath().finally(() => window.clearTimeout(timer)),
+        new Promise<void>((resolve) => { timer = window.setTimeout(resolve, FINISH_RENDER_MATH_TIMEOUT_MS); }),
+      ]);
     } catch (err) {
       console.warn("[advanced-pdf-export] finishRenderMath failed:", err);
     }
@@ -1868,6 +1904,10 @@ export default class MarkdownPDFPlugin extends Plugin {
 
   async onload() {
     await this.loadSettings();
+    // Fire-and-forget: pay MathJax's one-time cold-start cost now, in the
+    // background, so it's already done by the time the user opens the export
+    // modal instead of adding several seconds to their first real render.
+    void warmUpMathJax();
     this.addCommand({
       id: "open-panel",
       name: "Open Panel",
