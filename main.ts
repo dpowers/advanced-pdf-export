@@ -1,7 +1,7 @@
 import {
   App, Component, MarkdownRenderer, MarkdownView, Menu, Modal, Notice,
   Plugin, PluginSettingTab, Setting, TFile, requestUrl, setIcon,
-  finishRenderMath, renderMath,
+  finishRenderMath,
 } from "obsidian";
 import { PDFArray, PDFDict, PDFDocument, PDFHexString, PDFName, PDFNull, PDFNumber } from "pdf-lib";
 
@@ -518,23 +518,31 @@ function splitMarkdownSections(md: string): string[] {
  *  AMS symbols, blackboard-bold, fraktur, calligraphic, sans-serif,
  *  typewriter, vector) as soon as the plugin loads, in the background —
  *  rather than paying that cost the first time the user actually renders.
+ *
+ *  Deliberately goes through the same `renderMarkdownToEl` pipeline used for
+ *  real renders instead of calling `renderMath()`/`finishRenderMath()`
+ *  directly: Obsidian only creates its global `MathJax` object lazily, the
+ *  first time something is typeset through its markdown post-processor
+ *  pipeline. Calling `renderMath()` directly before that has happened throws
+ *  `ReferenceError: MathJax is not defined` instead of triggering the load.
+ *
  *  Fire-and-forget: nothing downstream awaits this, and the real render path
- *  (`waitForMathRendering` / `waitForMathJaxStylesheetStable`) still verifies
- *  completion correctly on its own regardless of whether this has finished. */
-async function warmUpMathJax(): Promise<void> {
-  const temp = activeDocument.createElement("div");
-  temp.setCssStyles({ position: "fixed", top: "0", left: "-99999px", pointerEvents: "none" });
-  activeDocument.body.appendChild(temp);
+ *  still verifies completion correctly on its own regardless of whether this
+ *  has finished. */
+async function warmUpMathJax(app: App): Promise<void> {
+  const component = new Component();
+  component.load();
   try {
-    temp.appendChild(
-      renderMath("\\mathbf{A}+\\mathfrak{A}+\\mathcal{A}+\\mathsf{A}+\\mathtt{A}+\\mathbb{A}+\\aleph+\\vec{v}", true),
+    await renderMarkdownToEl(
+      app,
+      "$\\mathbf{A}+\\mathfrak{A}+\\mathcal{A}+\\mathsf{A}+\\mathtt{A}+\\mathbb{A}+\\aleph+\\vec{v}$",
+      "",
+      component,
     );
-    const timeout = new Promise<void>((resolve) => window.setTimeout(resolve, 5000));
-    await Promise.race([finishRenderMath(), timeout]);
   } catch (err) {
     console.warn("[advanced-pdf-export] MathJax warm-up failed (non-fatal):", err);
   } finally {
-    temp.remove();
+    component.unload();
   }
 }
 
@@ -1907,7 +1915,7 @@ export default class MarkdownPDFPlugin extends Plugin {
     // Fire-and-forget: pay MathJax's one-time cold-start cost now, in the
     // background, so it's already done by the time the user opens the export
     // modal instead of adding several seconds to their first real render.
-    void warmUpMathJax();
+    void warmUpMathJax(this.app);
     this.addCommand({
       id: "open-panel",
       name: "Open Panel",
