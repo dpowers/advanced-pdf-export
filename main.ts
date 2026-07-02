@@ -1115,7 +1115,7 @@ function getMathJaxCSS(): string {
 
   let adoptedCSS = "";
   try {
-    const sheets = (activeDocument as Document).adoptedStyleSheets ?? [];
+    const sheets = activeDocument.adoptedStyleSheets ?? [];
     adoptedCSS = sheets
       .map((sheet) => {
         try {
