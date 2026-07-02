@@ -1986,10 +1986,13 @@ function resolveActiveMarkdownFile(app: App, initialFile?: TFile | null): TFile 
 
 class PDFExportModal extends Modal {
   plugin: MarkdownPDFPlugin;
-  private editorEl: HTMLTextAreaElement;
-  private previewEl: HTMLElement;
-  private pageCountEl: HTMLElement;
-  private noteTitleEl: HTMLElement;
+  // These, like renderBtn/exportBtn/loadingOverlayEl below, are assigned
+  // unconditionally in buildUI() (called first thing in onOpen()) — never
+  // read before then, so a definite-assignment assertion is accurate here.
+  private editorEl!: HTMLTextAreaElement;
+  private previewEl!: HTMLElement;
+  private pageCountEl!: HTMLElement;
+  private noteTitleEl!: HTMLElement;
   private renderBtn!: HTMLButtonElement;
   private exportBtn!: HTMLButtonElement;
   private loadingOverlayEl!: HTMLElement;
