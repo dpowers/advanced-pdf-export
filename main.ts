@@ -1186,6 +1186,57 @@ function stripAtFontFaces(css: string): string {
   return css.replace(/@font-face\s*\{[^{}]*(?:\{[^{}]*\}[^{}]*)?\}/g, "");
 }
 
+// ─── Plugin-injected inline color CSS ─────────────────────────────────────────
+// Some plugins (e.g. Fast Text Color's `~={color}…=~` syntax) rewrite markdown
+// into class-tagged spans via post-processors that also run in this plugin's
+// render pipeline, but keep the matching class rules in a <style> element
+// injected into the app document. The preview shadow DOM and the export
+// BrowserWindow never see that element, so those spans would silently lose
+// their styling. The known style elements are harvested here and appended to
+// the document CSS.
+
+const PLUGIN_STYLE_ELEMENT_IDS = [
+  "fast-text-color-stylesheet", // Fast Text Color
+];
+
+const CSS_VAR_REF_RE = /var\(\s*(--[\w-]+)\s*\)/g;
+const CSS_VAR_DEF_RE = /(--[\w-]+)\s*:/g;
+
+/** Replaces `var(--x)` references with values computed on the app's <body> —
+ *  the export document defines none of Obsidian's CSS variables. References
+ *  the CSS text defines itself (e.g. Fast Text Color's `--ftc-color`) are left
+ *  untouched so self-contained rules keep working. Runs a few passes in case a
+ *  resolved value itself contains a var() reference. */
+function resolveAppCssVariables(css: string): string {
+  const computed = activeWindow.getComputedStyle(activeDocument.body);
+  for (let pass = 0; pass < 5; pass++) {
+    const defined = new Set<string>();
+    for (const [, name] of css.matchAll(CSS_VAR_DEF_RE)) defined.add(name);
+    let changed = false;
+    css = css.replace(CSS_VAR_REF_RE, (ref, name: string) => {
+      if (defined.has(name)) return ref;
+      const value = computed.getPropertyValue(name).trim();
+      if (!value) return ref;
+      changed = true;
+      return value;
+    });
+    if (!changed) break;
+  }
+  return css;
+}
+
+/** Collects the CSS of known plugin-injected style elements, with app CSS
+ *  variables resolved to concrete values. Returns "" when none are present. */
+function getPluginStyleCSS(): string {
+  const parts: string[] = [];
+  for (const id of PLUGIN_STYLE_ELEMENT_IDS) {
+    const text = activeDocument.getElementById(id)?.textContent;
+    if (text) parts.push(text);
+  }
+  if (parts.length === 0) return "";
+  return resolveAppCssVariables(parts.join("\n"));
+}
+
 /** Returns MathJax CSS with all font url() references replaced by base64 data URIs.
  *  The export BrowserWindow (loaded from a blob: URL) cannot resolve app:// font
  *  paths; inlining makes math characters visible. Falls back to the original URL
@@ -2389,7 +2440,9 @@ class PDFExportModal extends Modal {
     // fail to load fonts declared inside an adopted CSSStyleSheet.
     const rawMathCSS    = getMathJaxCSS();
     const shadowMathCSS = rawMathCSS ? stripAtFontFaces(rawMathCSS) : "";
-    const fullCSS = shadowMathCSS ? `${shadowMathCSS}\n${docCSS}` : docCSS;
+    // Plugin color CSS goes after docCSS so its class rules win specificity ties.
+    const pluginCSS = getPluginStyleCSS();
+    const fullCSS = [shadowMathCSS, docCSS, pluginCSS].filter(Boolean).join("\n");
 
     const allPages: HTMLElement[][] = [];
     for (const sectionEl of sectionEls) {
