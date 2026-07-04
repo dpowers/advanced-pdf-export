@@ -6,6 +6,9 @@
 
 Export Obsidian notes as pixel-perfect PDFs with seven style presets, manual page breaks, full layout control, and a live preview — all from a full-screen modal panel.
 
+> [!NOTE]
+> **This is a fork** of [ShrekBytes/advanced-pdf-export](https://github.com/ShrekBytes/advanced-pdf-export) that carries the styling of inline-coloring plugins into the preview and the exported PDF. Currently supported: [Fast Text Color](https://github.com/Superschnizel/obsidian-fast-text-color) — text colored with its `~={color}…=~` syntax now shows up colored in the PDF. The plugin's dynamically generated stylesheet is harvested from the app document and Obsidian CSS variables are resolved to concrete color values, since the isolated export window has neither.
+
 > **Desktop only** — requires the Obsidian desktop app (uses Electron's print pipeline).
 
 If this plugin saves you time, consider **[supporting the project](https://shrekbytes.github.io/support/)** ☕
